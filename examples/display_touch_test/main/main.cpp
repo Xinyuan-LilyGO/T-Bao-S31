@@ -66,7 +66,30 @@ uint16_t s_last_raw_touch_x = 0;
 uint16_t s_last_raw_touch_y = 0;
 bool s_have_raw_touch = false;
 
-void capture_raw_touch_coordinates(
+uint16_t map_touch_axis(
+    uint16_t value,
+    uint16_t source_min,
+    uint16_t source_max,
+    uint16_t destination_max)
+{
+    if (source_max <= source_min) {
+        return 0;
+    }
+
+    uint32_t clamped = value;
+    if (clamped < source_min) {
+        clamped = source_min;
+    } else if (clamped > source_max) {
+        clamped = source_max;
+    }
+
+    const uint32_t source_span = source_max - source_min;
+    const uint32_t numerator =
+        (clamped - source_min) * destination_max + source_span / 2;
+    return static_cast<uint16_t>(numerator / source_span);
+}
+
+void capture_and_scale_touch_coordinates(
     esp_lcd_touch_handle_t tp,
     uint16_t *x,
     uint16_t *y,
@@ -76,13 +99,24 @@ void capture_raw_touch_coordinates(
 {
     (void)tp;
     (void)strength;
-    (void)max_point_num;
-
-    // This callback runs before esp_lcd_touch applies swap/mirror flags.
-    if (point_num != nullptr && *point_num > 0) {
+    // This callback runs before esp_lcd_touch applies swap/mirror flags. Keep
+    // the original values for diagnostics, then scale the native 240x240
+    // coordinate space into the logical 320x320 touch coordinate space. The
+    // board orientation is applied afterward by the esp_lcd_touch flags.
+    if (point_num != nullptr && *point_num > 0 && x != nullptr && y != nullptr) {
         s_last_raw_touch_x = x[0];
         s_last_raw_touch_y = y[0];
         s_have_raw_touch = true;
+
+        const uint8_t point_count = std::min(*point_num, max_point_num);
+        for (uint8_t i = 0; i < point_count; ++i) {
+            x[i] = map_touch_axis(
+                x[i], BOARD_TOUCH_RAW_X_MIN, BOARD_TOUCH_RAW_X_MAX,
+                BOARD_TOUCH_H_RES - 1);
+            y[i] = map_touch_axis(
+                y[i], BOARD_TOUCH_RAW_Y_MIN, BOARD_TOUCH_RAW_Y_MAX,
+                BOARD_TOUCH_V_RES - 1);
+        }
     }
 }
 
@@ -413,10 +447,10 @@ bool init_touch()
         s_i2c_bus, &io_config, &s_touch_io));
 
     esp_lcd_touch_config_t touch_config = {};
-    // x_max/y_max are the last valid pixel indices. This keeps software
-    // mirroring from producing 320 on a 0..319 panel.
-    touch_config.x_max = BOARD_LCD_H_RES - 1;
-    touch_config.y_max = BOARD_LCD_V_RES - 1;
+    // x_max/y_max are the last valid coordinate indices, not the coordinate
+    // count. Using 319 keeps software mirroring inside a 0..319 range.
+    touch_config.x_max = BOARD_TOUCH_H_RES - 1;
+    touch_config.y_max = BOARD_TOUCH_V_RES - 1;
     // Reset and interrupt are routed through XL9555, not native ESP32 GPIOs.
     touch_config.rst_gpio_num = GPIO_NUM_NC;
     touch_config.int_gpio_num = GPIO_NUM_NC;
@@ -425,7 +459,7 @@ bool init_touch()
     touch_config.flags.swap_xy = BOARD_TOUCH_SWAP_XY;
     touch_config.flags.mirror_x = BOARD_TOUCH_MIRROR_X;
     touch_config.flags.mirror_y = BOARD_TOUCH_MIRROR_Y;
-    touch_config.process_coordinates = capture_raw_touch_coordinates;
+    touch_config.process_coordinates = capture_and_scale_touch_coordinates;
 
     const esp_err_t err = esp_lcd_touch_new_i2c_ft6x36(
         s_touch_io, &touch_config, &s_touch);
@@ -440,8 +474,20 @@ bool init_touch()
     }
 
     ESP_LOGI(kTag,
-             "FT6336/FT6336U ready: address=0x%02X, swap_xy=%d mirror_x=%d mirror_y=%d",
+             "FT6336/FT6336U ready: address=0x%02X, logical=%dx%d (0..%d,0..%d), "
+             "raw=%dx%d raw_cal=x[%d..%d] y[%d..%d], "
+             "swap_xy=%d mirror_x=%d mirror_y=%d",
              BOARD_TOUCH_I2C_ADDR,
+             BOARD_TOUCH_H_RES,
+             BOARD_TOUCH_V_RES,
+             BOARD_TOUCH_H_RES - 1,
+             BOARD_TOUCH_V_RES - 1,
+             BOARD_TOUCH_RAW_H_RES,
+             BOARD_TOUCH_RAW_V_RES,
+             BOARD_TOUCH_RAW_X_MIN,
+             BOARD_TOUCH_RAW_X_MAX,
+             BOARD_TOUCH_RAW_Y_MIN,
+             BOARD_TOUCH_RAW_Y_MAX,
              BOARD_TOUCH_SWAP_XY,
              BOARD_TOUCH_MIRROR_X,
              BOARD_TOUCH_MIRROR_Y);
@@ -467,9 +513,9 @@ void touch_task(void *arg)
     uint16_t raw_max_x = 0;
     uint16_t raw_min_y = UINT16_MAX;
     uint16_t raw_max_y = 0;
-    int mapped_min_x = BOARD_LCD_H_RES;
+    int mapped_min_x = BOARD_TOUCH_H_RES;
     int mapped_max_x = -1;
-    int mapped_min_y = BOARD_LCD_V_RES;
+    int mapped_min_y = BOARD_TOUCH_V_RES;
     int mapped_max_y = -1;
     bool have_gesture_range = false;
 
@@ -494,8 +540,8 @@ void touch_task(void *arg)
         if (result == TouchReadResult::kPoint) {
             was_touched = true;
             missed_samples = 0;
-            const int touch_x = std::clamp<int>(static_cast<int>(x), 0, BOARD_LCD_H_RES - 1);
-            const int touch_y = std::clamp<int>(static_cast<int>(y), 0, BOARD_LCD_V_RES - 1);
+            const int touch_x = std::clamp<int>(static_cast<int>(x), 0, BOARD_TOUCH_H_RES - 1);
+            const int touch_y = std::clamp<int>(static_cast<int>(y), 0, BOARD_TOUCH_V_RES - 1);
 
             if (s_have_raw_touch) {
                 raw_min_x = std::min(raw_min_x, s_last_raw_touch_x);
@@ -542,9 +588,9 @@ void touch_task(void *arg)
                 raw_max_x = 0;
                 raw_min_y = UINT16_MAX;
                 raw_max_y = 0;
-                mapped_min_x = BOARD_LCD_H_RES;
+                mapped_min_x = BOARD_TOUCH_H_RES;
                 mapped_max_x = -1;
-                mapped_min_y = BOARD_LCD_V_RES;
+                mapped_min_y = BOARD_TOUCH_V_RES;
                 mapped_max_y = -1;
                 have_gesture_range = false;
             }

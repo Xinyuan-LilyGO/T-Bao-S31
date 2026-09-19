@@ -11,8 +11,10 @@ It performs the following checks:
 - Initializes the FT6336/FT6336U touch controller at I2C address `0x38`.
 - Resets the touch controller through XL9555 P01 at address `0x22`.
 - Prints touch coordinates to the serial console and draws a marker at each point.
-- Rotates and mirrors touch coordinates to match the LCD: `display_x = 319 - raw_y`,
-  `display_y = raw_x`.
+- Exposes a logical touch coordinate space of `320 x 320` (`0..319` on each axis).
+- Scales the FT6336 native `240 x 240` coordinate range (`0..239`) to `320 x 320`.
+- Corrects the panel orientation after scaling:
+  `display_x = 319 - scaled_x`, `display_y = scaled_y`.
 
 The example uses the following ESP Component Registry drivers:
 
@@ -32,6 +34,16 @@ release. Each gesture also logs raw and mapped coordinate ranges.
 
 The LCD backlight controller is a separate device labeled `0x15` in the
 schematic; the touch controller uses `0x38`, so these addresses are distinct.
+
+The touch resolution is a logical coordinate range, not a setting that changes
+the FT6336 sensor hardware. `main/board_config.h` maps the native raw range
+`0..239` into `0..319` on both axes, then mirrors only X to correct the
+observed orientation: a left-to-right gesture must move left-to-right on the
+LCD, while Y remains direct. If an edge sweep shows that the actual raw active
+area is different, update `BOARD_TOUCH_RAW_X_MIN/MAX` and
+`BOARD_TOUCH_RAW_Y_MIN/MAX` with the measured values. `x_max` and `y_max`
+remain `319` because they are maximum valid indices used by the ESP touch
+middleware for mirroring.
 
 The local `components/esp_lcd_st7796` directory supplies the `1.4.0` LCD
 component used by this example and keeps the project buildable with ESP-IDF

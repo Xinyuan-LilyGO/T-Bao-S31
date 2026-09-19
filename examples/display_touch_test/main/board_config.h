@@ -43,15 +43,29 @@
 
 // The touch controller is behind the main-board level shifter.
 #define BOARD_TOUCH_I2C_ADDR            0x38
-#define BOARD_TOUCH_SWAP_XY             1
-#define BOARD_TOUCH_MIRROR_X            0
-#define BOARD_TOUCH_MIRROR_Y            1
+#define BOARD_TOUCH_H_RES               320
+#define BOARD_TOUCH_V_RES               320
+#define BOARD_TOUCH_RAW_H_RES           240
+#define BOARD_TOUCH_RAW_V_RES           240
+// The raw FT6336 X axis is reversed relative to the LCD. Keep Y direct and
+// mirror X in the esp_lcd_touch middleware after scaling to 320x320.
+#define BOARD_TOUCH_SWAP_XY             0
+#define BOARD_TOUCH_MIRROR_X            1
+#define BOARD_TOUCH_MIRROR_Y            0
 #define BOARD_TOUCH_INT_ACTIVE_LEVEL    0
+
+// FT6336 raw coordinate calibration. The default panel coordinate space is
+// 240x240, so the valid raw index range is 0..239. Adjust these four values
+// after an edge-sweep if the module reports a different active area.
+#define BOARD_TOUCH_RAW_X_MIN           0
+#define BOARD_TOUCH_RAW_X_MAX           (BOARD_TOUCH_RAW_H_RES - 1)
+#define BOARD_TOUCH_RAW_Y_MIN           0
+#define BOARD_TOUCH_RAW_Y_MAX           (BOARD_TOUCH_RAW_V_RES - 1)
 
 // The FT6336U component defaults to a high threshold and a low report rate.
 // These values match the panel's initial register values and improve tracking.
 #define BOARD_TOUCH_THRESHOLD            25
-#define BOARD_TOUCH_REPORT_RATE_HZ       60
+#define BOARD_TOUCH_REPORT_RATE_HZ       30
 // FT6336 G_MODE: 0 = interrupt polling mode, 1 = interrupt trigger mode.
 #define BOARD_TOUCH_G_MODE               0
 
