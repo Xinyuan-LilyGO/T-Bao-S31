@@ -1,0 +1,6 @@
+dependencies:
+  espressif/esp_lcd_st7796:
+    version: ^1.4.0
+    override_path: ../components/esp_lcd_st7796
+  lambage/esp_lcd_touch_ft6336u: ^1.0.8
+  sheldonix/esp_io_expander_xl9555: ^0.8.0
