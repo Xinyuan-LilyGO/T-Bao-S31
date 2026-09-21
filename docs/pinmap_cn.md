@@ -194,7 +194,7 @@ U25 电平转换器连接公共 I2C。触摸复位和中断分别由副板 XL955
 | 8 | `PWDN` 经 R61 100K 下拉到 GND | 未接 ESP32/XL9555 GPIO |
 | 23、24 | D1、D0 接到 `DOVDD` | 未接 ESP32 数据 GPIO |
 
-摄像头电源管理器 `SGM38121` 的 I2C 地址为 `0x28`，其 I2C 连接使用摄像头侧网络，不能直接等同于副板主 I2C 上的传感器地址。
+摄像头电源管理器 `SGM38121` 的 I2C 地址为 `0x28`，其 SDA/SCL 接主 I2C0（GPIO0/GPIO1，网络 `SDA`/`SCL`），与摄像头传感器的 I2C1（GPIO3/GPIO4，网络 `CAM_SDA`/`CAM_SCL`）不同。上电时先通过主 I2C 配置电源并使能 `DVDD`、`DOVDD`、`AVDD`，待电源稳定后再初始化摄像头。
 
 ## 5. 副板 XL9555 扩展 IO
 
@@ -425,7 +425,7 @@ MAIN Page 4 还放置了独立测试/调试排针，原理图标出的网络包�
 | 充电管理 | SGM41529 U17 | `0x6B` | PWR Page 1/3 |  |
 | IO 扩展 | XL9555 U26 | `0x22` | PWR Page 3/3 |  |
 | 摄像头 | OV2640/OV3660 接口 | `0x78` | MAIN Page 3/4；`AGENTS.md` | 摄像头侧 `CAM_SDA/CAM_SCL` |
-| 摄像头电源管理 | SGM38121 U21 | `0x28` | MAIN Page 3/4；`AGENTS.md` | 摄像头侧 I2C |
+| 摄像头电源管理 | SGM38121 U21 | `0x28` | MAIN Page 3/4；`AGENTS.md` | 主 I2C0，SDA=GPIO0、SCL=GPIO1；摄像头传感器另用 I2C1 |
 | 外部传感器 | U9 `HDR1X5` | `0x68/0x28` | PWR Page 3/3 | 地址取决于传感器配置 |
 
 ## 14. 需要特别注意的管脚

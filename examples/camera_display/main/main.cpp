@@ -1,0 +1,611 @@
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+
+#include "board_config.h"
+#include "driver/i2c_master.h"
+#include "driver/ledc.h"
+extern "C" {
+#include "esp_cam_io_parl.h"
+}
+#include "esp_err.h"
+#include "esp_heap_caps.h"
+#include "esp_lcd_io_i80.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_lcd_st7796.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+#include "jpeg_decoder.h"
+
+namespace {
+
+constexpr char kTag[] = "camera_display";
+constexpr int kFrameWidth = BOARD_CAMERA_FRAME_WIDTH;
+constexpr int kFrameHeight = BOARD_CAMERA_FRAME_HEIGHT;
+constexpr int kFrameX = (BOARD_LCD_H_RES - kFrameWidth) / 2;
+constexpr int kFrameY = (BOARD_LCD_V_RES - kFrameHeight) / 2;
+constexpr size_t kFrameBytes = kFrameWidth * kFrameHeight * sizeof(uint16_t);
+constexpr size_t kStripPixels = BOARD_LCD_H_RES * BOARD_LCD_DMA_LINES;
+constexpr int kI2cTimeoutMs = 100;
+constexpr uint8_t kPmicRevisionReg = 0x00;
+constexpr uint8_t kPmicDvdd1VoutReg = 0x03;
+constexpr uint8_t kPmicAvdd1VoutReg = 0x05;
+constexpr uint8_t kPmicAvdd2VoutReg = 0x06;
+constexpr uint8_t kPmicDvddSequenceReg = 0x0A;
+constexpr uint8_t kPmicAvddSequenceReg = 0x0B;
+constexpr uint8_t kPmicEnableReg = 0x0E;
+
+esp_lcd_panel_handle_t s_panel = nullptr;
+SemaphoreHandle_t s_flush_done = nullptr;
+uint16_t *s_strip = nullptr;
+
+// Five-pixel-wide digits 0-9 and uppercase letters A-Z, seven rows each.
+constexpr uint8_t kFont[36][7] = {
+    {14, 17, 19, 21, 25, 17, 14}, {4, 12, 4, 4, 4, 4, 14},
+    {14, 17, 1, 2, 4, 8, 31}, {30, 1, 1, 14, 1, 1, 30},
+    {2, 6, 10, 18, 31, 2, 2}, {31, 16, 30, 1, 1, 17, 14},
+    {6, 8, 16, 30, 17, 17, 14}, {31, 1, 2, 4, 8, 8, 8},
+    {14, 17, 17, 14, 17, 17, 14}, {14, 17, 17, 15, 1, 2, 12},
+    {14, 17, 17, 31, 17, 17, 17}, {30, 17, 17, 30, 17, 17, 30},
+    {14, 17, 16, 16, 16, 17, 14}, {30, 17, 17, 17, 17, 17, 30},
+    {31, 16, 16, 30, 16, 16, 31}, {31, 16, 16, 30, 16, 16, 16},
+    {14, 17, 16, 23, 17, 17, 14}, {17, 17, 17, 31, 17, 17, 17},
+    {14, 4, 4, 4, 4, 4, 14}, {7, 2, 2, 2, 18, 18, 12},
+    {17, 18, 20, 24, 20, 18, 17}, {16, 16, 16, 16, 16, 16, 31},
+    {17, 27, 21, 21, 17, 17, 17}, {17, 25, 21, 19, 17, 17, 17},
+    {14, 17, 17, 17, 17, 17, 14}, {30, 17, 17, 30, 16, 16, 16},
+    {14, 17, 17, 17, 21, 18, 13}, {30, 17, 17, 30, 20, 18, 17},
+    {15, 16, 16, 14, 1, 1, 30}, {31, 4, 4, 4, 4, 4, 4},
+    {17, 17, 17, 17, 17, 17, 14}, {17, 17, 17, 17, 17, 10, 4},
+    {17, 17, 17, 21, 21, 21, 10}, {17, 17, 10, 4, 10, 17, 17},
+    {17, 17, 10, 4, 4, 4, 4}, {31, 1, 2, 4, 8, 16, 31},
+};
+
+bool IRAM_ATTR lcd_transfer_done(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t *, void *context)
+{
+    BaseType_t task_woken = pdFALSE;
+    xSemaphoreGiveFromISR(static_cast<SemaphoreHandle_t>(context), &task_woken);
+    return task_woken == pdTRUE;
+}
+
+void flush_strip(int x, int y, int width, int height)
+{
+    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(s_panel, x, y, x + width, y + height, s_strip));
+    if (xSemaphoreTake(s_flush_done, pdMS_TO_TICKS(3000)) != pdTRUE) {
+        ESP_LOGE(kTag, "LCD transfer timed out");
+        abort();
+    }
+}
+
+void clear_screen()
+{
+    std::fill_n(s_strip, kStripPixels, uint16_t{0});
+    for (int y = 0; y < BOARD_LCD_V_RES; y += BOARD_LCD_DMA_LINES) {
+        flush_strip(0, y, BOARD_LCD_H_RES,
+                    std::min(BOARD_LCD_DMA_LINES, BOARD_LCD_V_RES - y));
+    }
+}
+
+const uint8_t *glyph(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return kFont[c - '0'];
+    }
+    if (c >= 'A' && c <= 'Z') {
+        return kFont[c - 'A' + 10];
+    }
+    return nullptr;
+}
+
+void draw_text(int y, const char *text, uint16_t color)
+{
+    std::fill_n(s_strip, kStripPixels, uint16_t{0});
+    constexpr int char_width = 12;
+    const int length = std::min<int>(std::strlen(text), BOARD_LCD_H_RES / char_width);
+    const int start_x = (BOARD_LCD_H_RES - length * char_width) / 2;
+
+    for (int i = 0; i < length; ++i) {
+        const uint8_t *rows = glyph(text[i]);
+        if (rows == nullptr) {
+            continue;
+        }
+        for (int row = 0; row < 7; ++row) {
+            for (int column = 0; column < 5; ++column) {
+                if (rows[row] & (1U << (4 - column))) {
+                    const int pixel = start_x + i * char_width + column * 2;
+                    s_strip[(row * 2) * BOARD_LCD_H_RES + pixel] = color;
+                    s_strip[(row * 2) * BOARD_LCD_H_RES + pixel + 1] = color;
+                    s_strip[(row * 2 + 1) * BOARD_LCD_H_RES + pixel] = color;
+                    s_strip[(row * 2 + 1) * BOARD_LCD_H_RES + pixel + 1] = color;
+                }
+            }
+        }
+    }
+    flush_strip(0, y, BOARD_LCD_H_RES, BOARD_LCD_DMA_LINES);
+}
+
+void show_status(const char *heading, const char *detail, const char *identity = "")
+{
+    clear_screen();
+    draw_text(112, heading, 0xFFFF);
+    draw_text(144, detail, 0xFFE0);
+    draw_text(176, identity, 0xFFFF);
+}
+
+void init_lcd()
+{
+    gpio_config_t bl_config = {};
+    bl_config.pin_bit_mask = 1ULL << BOARD_LCD_BL;
+    bl_config.mode = GPIO_MODE_OUTPUT;
+    ESP_ERROR_CHECK(gpio_config(&bl_config));
+    ESP_ERROR_CHECK(gpio_set_level(BOARD_LCD_BL, 0));
+
+    s_flush_done = xSemaphoreCreateBinary();
+    ESP_ERROR_CHECK(s_flush_done == nullptr ? ESP_ERR_NO_MEM : ESP_OK);
+
+    esp_lcd_i80_bus_config_t bus_config = {};
+    bus_config.dc_gpio_num = BOARD_LCD_RS;
+    bus_config.wr_gpio_num = BOARD_LCD_WR;
+    bus_config.clk_src = LCD_CLK_SRC_PLL160M;
+    std::fill_n(bus_config.data_gpio_nums, ESP_LCD_I80_BUS_WIDTH_MAX, GPIO_NUM_NC);
+    bus_config.data_gpio_nums[0] = BOARD_LCD_D0;
+    bus_config.data_gpio_nums[1] = BOARD_LCD_D1;
+    bus_config.data_gpio_nums[2] = BOARD_LCD_D2;
+    bus_config.data_gpio_nums[3] = BOARD_LCD_D3;
+    bus_config.data_gpio_nums[4] = BOARD_LCD_D4;
+    bus_config.data_gpio_nums[5] = BOARD_LCD_D5;
+    bus_config.data_gpio_nums[6] = BOARD_LCD_D6;
+    bus_config.data_gpio_nums[7] = BOARD_LCD_D7;
+    bus_config.bus_width = BOARD_LCD_DATA_WIDTH;
+    bus_config.max_transfer_bytes = kStripPixels * sizeof(uint16_t);
+    bus_config.dma_burst_size = 64;
+
+    esp_lcd_i80_bus_handle_t bus = nullptr;
+    ESP_ERROR_CHECK(esp_lcd_new_i80_bus(&bus_config, &bus));
+
+    esp_lcd_panel_io_i80_config_t io_config = {};
+    io_config.cs_gpio_num = BOARD_LCD_CS;
+    io_config.pclk_hz = BOARD_LCD_PIXEL_CLOCK_HZ;
+    io_config.trans_queue_depth = 10;
+    io_config.on_color_trans_done = lcd_transfer_done;
+    io_config.user_ctx = s_flush_done;
+    io_config.lcd_cmd_bits = 8;
+    io_config.lcd_param_bits = 8;
+    io_config.dc_levels.dc_data_level = 1;
+    io_config.flags.swap_color_bytes = 1;
+
+    esp_lcd_panel_io_handle_t io = nullptr;
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i80(bus, &io_config, &io));
+
+    esp_lcd_panel_dev_config_t panel_config = {};
+    panel_config.reset_gpio_num = BOARD_LCD_RST;
+    panel_config.rgb_ele_order = BOARD_LCD_RGB_ORDER;
+    panel_config.bits_per_pixel = 16;
+    ESP_ERROR_CHECK(esp_lcd_new_panel_st7796(io, &panel_config, &s_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, BOARD_LCD_MIRROR_X, BOARD_LCD_MIRROR_Y));
+    ESP_ERROR_CHECK(esp_lcd_panel_set_gap(s_panel, 0, 0));
+    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
+
+    s_strip = static_cast<uint16_t *>(esp_lcd_i80_alloc_draw_buffer(
+        io, kStripPixels * sizeof(uint16_t), MALLOC_CAP_DMA));
+    ESP_ERROR_CHECK(s_strip == nullptr ? ESP_ERR_NO_MEM : ESP_OK);
+    clear_screen();
+    ESP_ERROR_CHECK(gpio_set_level(BOARD_LCD_BL, 1));
+}
+
+esp_err_t read_pmic_reg(i2c_master_dev_handle_t pmic, uint8_t reg, uint8_t *value)
+{
+    return i2c_master_transmit_receive(pmic, &reg, 1, value, 1, kI2cTimeoutMs);
+}
+
+esp_err_t write_pmic_verified(i2c_master_dev_handle_t pmic, uint8_t reg, uint8_t value)
+{
+    const uint8_t command[] = {reg, value};
+    esp_err_t err = i2c_master_transmit(pmic, command, sizeof(command), kI2cTimeoutMs);
+    uint8_t actual = 0;
+    if (err == ESP_OK) {
+        err = read_pmic_reg(pmic, reg, &actual);
+    }
+    if (err == ESP_OK && actual != value) {
+        ESP_LOGE(kTag, "SGM38121 reg 0x%02X: wrote 0x%02X, read 0x%02X", reg, value, actual);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    return err;
+}
+
+esp_err_t init_camera_power()
+{
+    i2c_master_bus_config_t bus_config = {};
+    bus_config.i2c_port = BOARD_PMIC_I2C_PORT;
+    bus_config.sda_io_num = BOARD_PMIC_SDA;
+    bus_config.scl_io_num = BOARD_PMIC_SCL;
+    bus_config.clk_source = I2C_CLK_SRC_DEFAULT;
+    bus_config.glitch_ignore_cnt = 7;
+    bus_config.flags.enable_internal_pullup = true;
+
+    i2c_master_bus_handle_t bus = nullptr;
+    esp_err_t err = i2c_new_master_bus(&bus_config, &bus);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "SGM38121 I2C0: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    i2c_device_config_t config = {};
+    config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    config.device_address = BOARD_PMIC_ADDR;
+    config.scl_speed_hz = BOARD_PMIC_I2C_HZ;
+    i2c_master_dev_handle_t pmic = nullptr;
+    err = i2c_master_bus_add_device(bus, &config, &pmic);
+    const char *stage = "add device";
+    if (err == ESP_OK) {
+        uint8_t revision = 0;
+        stage = "read revision";
+        err = read_pmic_reg(pmic, kPmicRevisionReg, &revision);
+        if (err == ESP_OK && revision != 0x80) {
+            ESP_LOGE(kTag, "Unexpected SGM38121 revision: 0x%02X", revision);
+            err = ESP_ERR_INVALID_RESPONSE;
+        }
+        uint8_t enabled = 0;
+        if (err == ESP_OK) {
+            stage = "read enabled rails";
+            err = read_pmic_reg(pmic, kPmicEnableReg, &enabled);
+        }
+        // Stop previously enabled rails before changing the DOVDD voltage.
+        if (err == ESP_OK && (enabled & BOARD_PMIC_CAMERA_RAILS)) {
+            stage = "disable camera rails";
+            err = write_pmic_verified(pmic, kPmicEnableReg,
+                                      enabled & ~BOARD_PMIC_CAMERA_RAILS);
+        }
+        uint8_t sequence = 0;
+        if (err == ESP_OK) {
+            stage = "read DVDD sequence";
+            err = read_pmic_reg(pmic, kPmicDvddSequenceReg, &sequence);
+        }
+        if (err == ESP_OK && (sequence & 0x0F)) {
+            stage = "set DVDD1 register control";
+            err = write_pmic_verified(pmic, kPmicDvddSequenceReg, sequence & 0xF0);
+        }
+        if (err == ESP_OK) {
+            stage = "read AVDD sequence";
+            err = read_pmic_reg(pmic, kPmicAvddSequenceReg, &sequence);
+        }
+        if (err == ESP_OK && sequence != 0) {
+            stage = "set AVDD register control";
+            err = write_pmic_verified(pmic, kPmicAvddSequenceReg, 0);
+        }
+        if (err == ESP_OK) {
+            stage = "set DVDD 1.2V";
+            err = write_pmic_verified(pmic, kPmicDvdd1VoutReg, BOARD_PMIC_DVDD1_VOUT);
+        }
+        if (err == ESP_OK) {
+            stage = "set DOVDD 1.8V";
+            err = write_pmic_verified(pmic, kPmicAvdd1VoutReg, BOARD_PMIC_AVDD1_VOUT);
+        }
+        if (err == ESP_OK) {
+            stage = "set AVDD 2.8V";
+            err = write_pmic_verified(pmic, kPmicAvdd2VoutReg, BOARD_PMIC_AVDD2_VOUT);
+        }
+        if (err == ESP_OK) {
+            stage = "enable camera rails";
+            err = write_pmic_verified(pmic, kPmicEnableReg,
+                                      enabled | BOARD_PMIC_CAMERA_RAILS);
+        }
+        if (err == ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            ESP_LOGI(kTag, "SGM38121 enabled (targets: DVDD=1.2V, DOVDD=1.8V, AVDD=2.8V)");
+        }
+        const esp_err_t remove_err = i2c_master_bus_rm_device(pmic);
+        if (err == ESP_OK) {
+            err = remove_err;
+        }
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "SGM38121 %s failed: %s", stage, esp_err_to_name(err));
+    }
+    const esp_err_t del_err = i2c_del_master_bus(bus);
+    return err == ESP_OK ? del_err : err;
+}
+
+struct CameraIdentity {
+    uint8_t address = 0;
+    uint16_t pid = 0;
+    bool has_pid = false;
+};
+
+bool read_camera_reg(i2c_master_dev_handle_t device, uint16_t reg, bool wide, uint8_t *value)
+{
+    const uint8_t address[2] = {static_cast<uint8_t>(reg >> 8), static_cast<uint8_t>(reg)};
+    return i2c_master_transmit_receive(device, wide ? address : &address[1],
+                                       wide ? 2 : 1, value, 1, kI2cTimeoutMs) == ESP_OK;
+}
+
+CameraIdentity identify_camera(i2c_master_bus_handle_t bus)
+{
+    CameraIdentity identity;
+    // Prefer the addresses supported by esp_cam_io_parl; scan for other sensors if none responds.
+    constexpr uint8_t known_addresses[] = {0x30, 0x3C, 0x2A};
+    for (uint8_t address : known_addresses) {
+        if (i2c_master_probe(bus, address, kI2cTimeoutMs) == ESP_OK) {
+            identity.address = address;
+            break;
+        }
+    }
+    if (identity.address == 0) {
+        for (int address = 0x08; address <= 0x77; ++address) {
+            if (i2c_master_probe(bus, address, 20) == ESP_OK) {
+                identity.address = static_cast<uint8_t>(address);
+                break;
+            }
+        }
+    }
+    if (identity.address == 0) {
+        return identity;
+    }
+
+    i2c_device_config_t config = {};
+    config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    config.device_address = identity.address;
+    config.scl_speed_hz = BOARD_CAMERA_I2C_HZ;
+    i2c_master_dev_handle_t device = nullptr;
+    if (i2c_master_bus_add_device(bus, &config, &device) != ESP_OK) {
+        return identity;
+    }
+
+    uint8_t high = 0;
+    uint8_t low = 0;
+    if (identity.address == 0x30) {
+        const uint8_t bank[] = {0xFF, 0x01};
+        if (i2c_master_transmit(device, bank, sizeof(bank), kI2cTimeoutMs) == ESP_OK &&
+            read_camera_reg(device, 0x0A, false, &high) &&
+            read_camera_reg(device, 0x0B, false, &low)) {
+            identity.pid = (static_cast<uint16_t>(high) << 8) | low;
+            identity.has_pid = true;
+        }
+    } else if (identity.address == 0x3C || identity.address == 0x2A) {
+        if (identity.address == 0x2A) {
+            const uint8_t bank[] = {0x30, 0x08, 0x01};
+            if (i2c_master_transmit(device, bank, sizeof(bank), kI2cTimeoutMs) != ESP_OK) {
+                ESP_ERROR_CHECK(i2c_master_bus_rm_device(device));
+                return identity;
+            }
+        }
+        const uint16_t reg = identity.address == 0x2A ? 0x3000 : 0x300A;
+        if (read_camera_reg(device, reg, true, &high) &&
+            read_camera_reg(device, reg + 1, true, &low)) {
+            identity.pid = (static_cast<uint16_t>(high) << 8) | low;
+            identity.has_pid = true;
+        }
+    }
+    ESP_ERROR_CHECK(i2c_master_bus_rm_device(device));
+    return identity;
+}
+
+void report_camera_failure(i2c_master_bus_handle_t bus, esp_err_t error)
+{
+    // The sensor driver stops XCLK when probing fails. Restore it to read the PID.
+    ledc_timer_config_t timer = {};
+    timer.speed_mode = LEDC_LOW_SPEED_MODE;
+    timer.duty_resolution = LEDC_TIMER_1_BIT;
+    timer.timer_num = LEDC_TIMER_0;
+    timer.freq_hz = BOARD_CAMERA_XCLK_HZ;
+    timer.clk_cfg = LEDC_AUTO_CLK;
+
+    ledc_channel_config_t channel = {};
+    channel.gpio_num = BOARD_CAMERA_XCLK;
+    channel.speed_mode = LEDC_LOW_SPEED_MODE;
+    channel.channel = LEDC_CHANNEL_0;
+    channel.timer_sel = LEDC_TIMER_0;
+    channel.duty = 1;
+
+    CameraIdentity identity;
+    if (ledc_timer_config(&timer) == ESP_OK && ledc_channel_config(&channel) == ESP_OK) {
+        gpio_config_t reset_config = {};
+        reset_config.pin_bit_mask = 1ULL << BOARD_CAMERA_RESET;
+        reset_config.mode = GPIO_MODE_OUTPUT;
+        if (gpio_config(&reset_config) == ESP_OK) {
+            gpio_set_level(BOARD_CAMERA_RESET, 0);
+            vTaskDelay(pdMS_TO_TICKS(10));
+            gpio_set_level(BOARD_CAMERA_RESET, 1);
+            vTaskDelay(pdMS_TO_TICKS(30));
+            identity = identify_camera(bus);
+        }
+    }
+
+    char label[24] = {};
+    if (identity.has_pid) {
+        std::snprintf(label, sizeof(label), "PID 0X%04X", identity.pid);
+    } else if (identity.address != 0) {
+        std::snprintf(label, sizeof(label), "ADDR 0X%02X", identity.address);
+    } else {
+        std::snprintf(label, sizeof(label), "CHECK CABLE");
+    }
+    ESP_LOGE(kTag, "Camera init: %s, I2C=0x%02X, PID=%s0x%04X",
+             esp_err_to_name(error), identity.address, identity.has_pid ? "" : "unknown ",
+             identity.pid);
+    show_status("CAMERA ERROR",
+                error == ESP_ERR_NOT_SUPPORTED ? "UNSUPPORTED" :
+                error == ESP_ERR_NOT_FOUND ? "NOT FOUND" : "INIT FAILED",
+                label);
+}
+
+bool init_camera(i2c_master_bus_handle_t bus, esp_cam_io_parl_handle_t *out_io,
+                 esp_cam_sensor_io_parl_handle_t *out_sensor)
+{
+    esp_cam_sensor_io_parl_config_t sensor_config = {};
+    sensor_config.pwdn_io = GPIO_NUM_NC; // PWDN is pulled low on the board.
+    sensor_config.reset_io = BOARD_CAMERA_RESET;
+    sensor_config.xclk_io = BOARD_CAMERA_XCLK;
+    sensor_config.xclk_hz = BOARD_CAMERA_XCLK_HZ;
+    sensor_config.sda_io = GPIO_NUM_NC;
+    sensor_config.scl_io = GPIO_NUM_NC;
+    sensor_config.i2c_port = BOARD_CAMERA_I2C_PORT;
+    sensor_config.ledc_timer = LEDC_TIMER_0;
+    sensor_config.ledc_channel = LEDC_CHANNEL_0;
+    sensor_config.pixel_format = ESP_CAM_IO_PARL_PIXFORMAT_JPEG;
+    sensor_config.frame_size = ESP_CAM_IO_PARL_FRAMESIZE_240X240;
+    sensor_config.jpeg_quality = BOARD_CAMERA_JPEG_QUALITY;
+
+    esp_err_t err = esp_cam_new_sensor_io_parl(&sensor_config, out_sensor);
+    if (err != ESP_OK) {
+        report_camera_failure(bus, err);
+        return false;
+    }
+
+    const uint16_t pid = (*out_sensor)->id.PID;
+    const char *model = pid == ESP_CAM_IO_PARL_OV2640_PID ? "OV2640" :
+                        pid == ESP_CAM_IO_PARL_OV3660_PID ? "OV3660" :
+                        pid == ESP_CAM_IO_PARL_OV5640_PID ? "OV5640" :
+                        pid == ESP_CAM_IO_PARL_NT99141_PID ? "NT99141" : "UNKNOWN";
+    ESP_LOGI(kTag, "Camera: %s PID=0x%04X, JPEG 240x240", model, pid);
+
+    esp_cam_io_parl_config_t io_config = {};
+    io_config.data_width = 8;
+    io_config.queue_frames = 1;
+    io_config.fill_mode = ESP_CAM_IO_PARL_QUEUE_LATEST;
+    io_config.frame_heap_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    io_config.pclk_io = BOARD_CAMERA_PCLK;
+    io_config.pclk_sample_edge = ESP_CAM_IO_PARL_PCLK_POS;
+    io_config.de_io = BOARD_CAMERA_HREF;
+    io_config.hsync_io = GPIO_NUM_NC;
+    io_config.vsync_io = GPIO_NUM_NC; // Not implemented by esp_cam_io_parl 0.1.0.
+    std::fill_n(io_config.data_io, PARLIO_RX_UNIT_MAX_DATA_WIDTH, GPIO_NUM_NC);
+    io_config.data_io[0] = BOARD_CAMERA_D0;
+    io_config.data_io[1] = BOARD_CAMERA_D1;
+    io_config.data_io[2] = BOARD_CAMERA_D2;
+    io_config.data_io[3] = BOARD_CAMERA_D3;
+    io_config.data_io[4] = BOARD_CAMERA_D4;
+    io_config.data_io[5] = BOARD_CAMERA_D5;
+    io_config.data_io[6] = BOARD_CAMERA_D6;
+    io_config.data_io[7] = BOARD_CAMERA_D7;
+
+    err = esp_cam_new_io_parl(&io_config, out_io);
+    if (err == ESP_OK) {
+        err = esp_cam_io_parl_enable(*out_io, true);
+    }
+    if (err == ESP_OK) {
+        err = esp_cam_sensor_io_parl_connect(*out_io);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "Camera PARLIO: %s, sensor PID=0x%04X", esp_err_to_name(err), pid);
+        char label[24];
+        std::snprintf(label, sizeof(label), "PID 0X%04X", pid);
+        show_status("CAMERA ERROR", "PARLIO FAILED", label);
+        return false;
+    }
+    return true;
+}
+
+void display_frame(const uint16_t *pixels)
+{
+    for (int row = 0; row < kFrameHeight; row += BOARD_LCD_DMA_LINES) {
+        const int lines = std::min(BOARD_LCD_DMA_LINES, kFrameHeight - row);
+        std::memcpy(s_strip, pixels + row * kFrameWidth,
+                    lines * kFrameWidth * sizeof(uint16_t));
+        flush_strip(kFrameX, kFrameY + row, kFrameWidth, lines);
+    }
+}
+
+} // namespace
+
+extern "C" void app_main(void)
+{
+    init_lcd();
+    show_status("CAMERA", "STARTING");
+
+    const esp_err_t power_err = init_camera_power();
+    if (power_err != ESP_OK) {
+        show_status("POWER ERROR", "SGM38121", "I2C 0X28");
+        return;
+    }
+
+    i2c_master_bus_config_t bus_config = {};
+    bus_config.i2c_port = BOARD_CAMERA_I2C_PORT;
+    bus_config.sda_io_num = BOARD_CAMERA_SDA;
+    bus_config.scl_io_num = BOARD_CAMERA_SCL;
+    bus_config.clk_source = I2C_CLK_SRC_DEFAULT;
+    bus_config.glitch_ignore_cnt = 7;
+    bus_config.flags.enable_internal_pullup = true;
+
+    i2c_master_bus_handle_t bus = nullptr;
+    const esp_err_t i2c_err = i2c_new_master_bus(&bus_config, &bus);
+    if (i2c_err != ESP_OK) {
+        ESP_LOGE(kTag, "Camera I2C: %s", esp_err_to_name(i2c_err));
+        show_status("CAMERA ERROR", "I2C FAILED");
+        return;
+    }
+    auto *rgb = static_cast<uint16_t *>(heap_caps_malloc(
+        kFrameBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    if (rgb == nullptr) {
+        ESP_LOGE(kTag, "No RAM for %u-byte RGB565 frame", unsigned(kFrameBytes));
+        show_status("CAMERA ERROR", "NO MEMORY");
+        return;
+    }
+
+    esp_cam_io_parl_handle_t camera_io = nullptr;
+    esp_cam_sensor_io_parl_handle_t sensor = nullptr;
+    if (!init_camera(bus, &camera_io, &sensor)) {
+        heap_caps_free(rgb);
+        return;
+    }
+
+    char camera_label[24];
+    std::snprintf(camera_label, sizeof(camera_label), "PID 0X%04X", sensor->id.PID);
+    uint32_t frames = 0;
+    uint32_t failures = 0;
+    bool error_visible = false;
+    while (true) {
+        esp_cam_io_parl_trans_t frame = {};
+        const esp_err_t receive_err = esp_cam_io_parl_receive(camera_io, &frame, 5000);
+        if (receive_err != ESP_OK) {
+            ESP_LOGW(kTag, "Camera capture: %s", esp_err_to_name(receive_err));
+        }
+
+        esp_err_t decode_err = ESP_FAIL;
+        esp_jpeg_image_output_t output = {};
+        if (receive_err == ESP_OK && frame.buffer != nullptr && frame.length > 0) {
+            esp_jpeg_image_cfg_t jpeg = {};
+            jpeg.indata = frame.buffer;
+            jpeg.indata_size = frame.length;
+            jpeg.outbuf = reinterpret_cast<uint8_t *>(rgb);
+            jpeg.outbuf_size = kFrameBytes;
+            jpeg.out_format = JPEG_IMAGE_FORMAT_RGB565;
+            jpeg.out_scale = JPEG_IMAGE_SCALE_0;
+            // Keep native uint16_t RGB565; the I80 IO swaps bytes when transmitting.
+            jpeg.flags.swap_color_bytes = 0;
+            decode_err = esp_jpeg_decode(&jpeg, &output);
+            ESP_ERROR_CHECK(esp_cam_io_parl_free_buffer(&frame));
+        } else if (frame.buffer != nullptr) {
+            ESP_ERROR_CHECK(esp_cam_io_parl_free_buffer(&frame));
+        }
+
+        if (decode_err != ESP_OK || output.width != kFrameWidth ||
+            output.height != kFrameHeight || output.output_len != kFrameBytes) {
+            if (receive_err == ESP_OK) {
+                ESP_LOGW(kTag, "JPEG decode: %s, %ux%u", esp_err_to_name(decode_err),
+                         output.width, output.height);
+            }
+            if (++failures == 3) {
+                show_status("CAMERA ERROR",
+                            receive_err == ESP_OK ? "DECODE FAILED" : "FRAME TIMEOUT",
+                            camera_label);
+                error_visible = true;
+            }
+        } else {
+            if (error_visible) {
+                clear_screen();
+                error_visible = false;
+            }
+            display_frame(rgb);
+            failures = 0;
+            if (++frames % 30 == 0) {
+                ESP_LOGI(kTag, "Displayed %lu frames", static_cast<unsigned long>(frames));
+            }
+        }
+        vTaskDelay(1);
+    }
+}
