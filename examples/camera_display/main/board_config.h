@@ -25,7 +25,7 @@
 #define BOARD_LCD_D7                GPIO_NUM_36
 
 #define BOARD_LCD_RGB_ORDER         LCD_RGB_ELEMENT_ORDER_RGB
-#define BOARD_LCD_MIRROR_X          true
+#define BOARD_LCD_MIRROR_X          false
 #define BOARD_LCD_MIRROR_Y          false
 
 #define BOARD_PMIC_I2C_PORT         I2C_NUM_0
@@ -33,9 +33,20 @@
 #define BOARD_PMIC_SCL              GPIO_NUM_1
 #define BOARD_PMIC_I2C_HZ           100000
 #define BOARD_PMIC_ADDR             0x28
-// DVDD1 -> DVDD (1.2V), AVDD1 -> DOVDD (1.8V), AVDD2 -> AVDD (2.8V).
+// Select the fitted sensor before applying power. OV2640 core voltage varies
+// by sensor revision; confirm the module's rating before selecting 1.3V.
+#define BOARD_CAMERA_POWER_PROFILE_OV3660 0
+#define BOARD_CAMERA_OV2640_CORE_1V3     0
+// DVDD1 -> DVDD (OV2640: 1.2V or 1.304V; OV3660: 1.504V).
+#if BOARD_CAMERA_POWER_PROFILE_OV3660
+#define BOARD_PMIC_DVDD1_VOUT       0x7D
+#elif BOARD_CAMERA_OV2640_CORE_1V3
+#define BOARD_PMIC_DVDD1_VOUT       0x64
+#else
 #define BOARD_PMIC_DVDD1_VOUT       0x57
-#define BOARD_PMIC_AVDD1_VOUT       0x34
+#endif
+// AVDD1 -> DOVDD (2.8V), AVDD2 -> AVDD (2.8V).
+#define BOARD_PMIC_AVDD1_VOUT       0xB1
 #define BOARD_PMIC_AVDD2_VOUT       0xB1
 #define BOARD_PMIC_CAMERA_RAILS     0x0D
 
@@ -54,6 +65,7 @@
 #define BOARD_CAMERA_D7             GPIO_NUM_53
 #define BOARD_CAMERA_PCLK           GPIO_NUM_54
 #define BOARD_CAMERA_XCLK           GPIO_NUM_55
+#define BOARD_CAMERA_VSYNC          GPIO_NUM_56
 #define BOARD_CAMERA_HREF           GPIO_NUM_57
 #define BOARD_CAMERA_XCLK_HZ        (20 * 1000 * 1000)
 #define BOARD_CAMERA_FRAME_WIDTH    240
