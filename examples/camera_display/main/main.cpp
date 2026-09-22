@@ -5,6 +5,7 @@
 
 #include "board_config.h"
 #include "driver/i2c_master.h"
+#include "driver/jpeg_decode.h"
 #include "driver/ledc.h"
 #include "driver/parlio_rx.h"
 extern "C" {
@@ -16,10 +17,10 @@ extern "C" {
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_st7796.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "jpeg_decoder.h"
 
 namespace {
 
@@ -30,6 +31,8 @@ constexpr int kFrameX = (BOARD_LCD_H_RES - kFrameWidth) / 2;
 constexpr int kFrameY = (BOARD_LCD_V_RES - kFrameHeight) / 2;
 constexpr size_t kFrameBytes = kFrameWidth * kFrameHeight * sizeof(uint16_t);
 constexpr size_t kStripPixels = BOARD_LCD_H_RES * BOARD_LCD_DMA_LINES;
+static_assert(kFrameWidth == BOARD_LCD_H_RES && kFrameHeight == BOARD_LCD_V_RES);
+static_assert(kFrameWidth % 16 == 0 && kFrameHeight % 16 == 0);
 constexpr int kI2cTimeoutMs = 100;
 constexpr uint8_t kPmicRevisionReg = 0x00;
 constexpr uint8_t kPmicDvdd1VoutReg = 0x03;
@@ -49,6 +52,7 @@ static_assert(kAvddTargetMv >= 2600 && kAvddTargetMv <= 3000);
 esp_lcd_panel_handle_t s_panel = nullptr;
 SemaphoreHandle_t s_flush_done = nullptr;
 uint16_t *s_strip = nullptr;
+uint16_t *s_frame = nullptr;
 
 // Five-pixel-wide digits 0-9 and uppercase letters A-Z, seven rows each.
 constexpr uint8_t kFont[36][7] = {
@@ -79,9 +83,9 @@ bool IRAM_ATTR lcd_transfer_done(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_eve
     return task_woken == pdTRUE;
 }
 
-void flush_strip(int x, int y, int width, int height)
+void flush_bitmap(int x, int y, int width, int height, const void *pixels)
 {
-    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(s_panel, x, y, x + width, y + height, s_strip));
+    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(s_panel, x, y, x + width, y + height, pixels));
     if (xSemaphoreTake(s_flush_done, pdMS_TO_TICKS(3000)) != pdTRUE) {
         ESP_LOGE(kTag, "LCD transfer timed out");
         abort();
@@ -92,8 +96,8 @@ void clear_screen()
 {
     std::fill_n(s_strip, kStripPixels, uint16_t{0});
     for (int y = 0; y < BOARD_LCD_V_RES; y += BOARD_LCD_DMA_LINES) {
-        flush_strip(0, y, BOARD_LCD_H_RES,
-                    std::min(BOARD_LCD_DMA_LINES, BOARD_LCD_V_RES - y));
+        flush_bitmap(0, y, BOARD_LCD_H_RES,
+                     std::min(BOARD_LCD_DMA_LINES, BOARD_LCD_V_RES - y), s_strip);
     }
 }
 
@@ -132,7 +136,7 @@ void draw_text(int y, const char *text, uint16_t color)
             }
         }
     }
-    flush_strip(0, y, BOARD_LCD_H_RES, BOARD_LCD_DMA_LINES);
+    flush_bitmap(0, y, BOARD_LCD_H_RES, BOARD_LCD_DMA_LINES, s_strip);
 }
 
 void show_status(const char *heading, const char *detail, const char *identity = "")
@@ -168,7 +172,7 @@ void init_lcd()
     bus_config.data_gpio_nums[6] = BOARD_LCD_D6;
     bus_config.data_gpio_nums[7] = BOARD_LCD_D7;
     bus_config.bus_width = BOARD_LCD_DATA_WIDTH;
-    bus_config.max_transfer_bytes = kStripPixels * sizeof(uint16_t);
+    bus_config.max_transfer_bytes = kFrameBytes;
     bus_config.dma_burst_size = 64;
 
     esp_lcd_i80_bus_handle_t bus = nullptr;
@@ -195,13 +199,16 @@ void init_lcd()
     ESP_ERROR_CHECK(esp_lcd_new_panel_st7796(io, &panel_config, &s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, BOARD_LCD_INVERT_COLOR));
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, BOARD_LCD_MIRROR_X, BOARD_LCD_MIRROR_Y));
     ESP_ERROR_CHECK(esp_lcd_panel_set_gap(s_panel, 0, 0));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
 
     s_strip = static_cast<uint16_t *>(esp_lcd_i80_alloc_draw_buffer(
         io, kStripPixels * sizeof(uint16_t), MALLOC_CAP_DMA));
-    ESP_ERROR_CHECK(s_strip == nullptr ? ESP_ERR_NO_MEM : ESP_OK);
+    s_frame = static_cast<uint16_t *>(esp_lcd_i80_alloc_draw_buffer(
+        io, kFrameBytes, MALLOC_CAP_DMA));
+    ESP_ERROR_CHECK((s_strip == nullptr || s_frame == nullptr) ? ESP_ERR_NO_MEM : ESP_OK);
     clear_screen();
     ESP_ERROR_CHECK(gpio_set_level(BOARD_LCD_BL, 1));
 }
@@ -512,7 +519,7 @@ bool init_camera(const CameraIdentity &identity, esp_cam_io_parl_handle_t *out_i
     sensor_config.ledc_timer = LEDC_TIMER_0;
     sensor_config.ledc_channel = LEDC_CHANNEL_0;
     sensor_config.pixel_format = ESP_CAM_IO_PARL_PIXFORMAT_JPEG;
-    sensor_config.frame_size = ESP_CAM_IO_PARL_FRAMESIZE_240X240;
+    sensor_config.frame_size = ESP_CAM_IO_PARL_FRAMESIZE_320X320;
     sensor_config.jpeg_quality = BOARD_CAMERA_JPEG_QUALITY;
 
     esp_err_t err = esp_cam_new_sensor_io_parl(&sensor_config, out_sensor);
@@ -526,7 +533,8 @@ bool init_camera(const CameraIdentity &identity, esp_cam_io_parl_handle_t *out_i
                         pid == ESP_CAM_IO_PARL_OV3660_PID ? "OV3660" :
                         pid == ESP_CAM_IO_PARL_OV5640_PID ? "OV5640" :
                         pid == ESP_CAM_IO_PARL_NT99141_PID ? "NT99141" : "UNKNOWN";
-    ESP_LOGI(kTag, "Camera: %s PID=0x%04X, JPEG 240x240", model, pid);
+    ESP_LOGI(kTag, "Camera: %s PID=0x%04X, JPEG %dx%d", model, pid,
+             kFrameWidth, kFrameHeight);
 
     esp_cam_io_parl_config_t io_config = {};
     io_config.data_width = 8;
@@ -552,17 +560,36 @@ bool init_camera(const CameraIdentity &identity, esp_cam_io_parl_handle_t *out_i
     if (err == ESP_OK) {
         err = esp_cam_io_parl_enable(*out_io, true);
     }
+    if (err == ESP_OK) {
+        err = esp_cam_sensor_io_parl_connect(*out_io);
+    }
+    if (err == ESP_OK && pid == ESP_CAM_IO_PARL_OV2640_PID) {
+        // The component selects the OV2640 CIF source for 320x320. Its 1:1
+        // CIF window is only 300x296, so configure a real 600x600 crop from
+        // the SVGA source and let the sensor downscale it to the LCD size.
+        constexpr int kOv2640SvgaMode = 1;
+        constexpr int kOv2640SquareOffsetX = 100;
+        constexpr int kOv2640SquareSourceSize = 600;
+        const int raw_err = (*out_sensor)->set_res_raw(
+            *out_sensor, kOv2640SvgaMode, 0, 0, 0,
+            kOv2640SquareOffsetX, 0,
+            kOv2640SquareSourceSize, kOv2640SquareSourceSize,
+            kFrameWidth, kFrameHeight, true, false);
+        if (raw_err != 0) {
+            ESP_LOGE(kTag, "OV2640 320x320 SVGA crop failed: %d", raw_err);
+            err = ESP_ERR_INVALID_STATE;
+        } else {
+            ESP_LOGI(kTag, "OV2640 source: centered 600x600 SVGA crop -> 320x320");
+        }
+    }
     if (err == ESP_OK && !(*out_io)->use_soft_delimiter) {
         // esp_cam_io_parl 0.1.0 only submits this transaction in soft-delimiter
-        // mode. ESP32-S31 uses the HREF level delimiter, so arm it here.
+        // mode. Arm S31 HREF capture after the final sensor configuration.
         parlio_receive_config_t receive_config = {};
         receive_config.delimiter = (*out_io)->rx_delimiter;
         receive_config.flags.partial_rx_en = true;
         err = parlio_rx_unit_receive((*out_io)->rx_unit, (*out_io)->payload,
                                      (*out_io)->payload_size, &receive_config);
-    }
-    if (err == ESP_OK) {
-        err = esp_cam_sensor_io_parl_connect(*out_io);
     }
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "Camera PARLIO: %s, sensor PID=0x%04X", esp_err_to_name(err), pid);
@@ -576,12 +603,7 @@ bool init_camera(const CameraIdentity &identity, esp_cam_io_parl_handle_t *out_i
 
 void display_frame(const uint16_t *pixels)
 {
-    for (int row = 0; row < kFrameHeight; row += BOARD_LCD_DMA_LINES) {
-        const int lines = std::min(BOARD_LCD_DMA_LINES, kFrameHeight - row);
-        std::memcpy(s_strip, pixels + row * kFrameWidth,
-                    lines * kFrameWidth * sizeof(uint16_t));
-        flush_strip(kFrameX, kFrameY + row, kFrameWidth, lines);
-    }
+    flush_bitmap(kFrameX, kFrameY, kFrameWidth, kFrameHeight, pixels);
 }
 
 } // namespace
@@ -652,56 +674,81 @@ extern "C" void app_main(void)
         return;
     }
 
-    auto *rgb = static_cast<uint16_t *>(heap_caps_malloc(
-        kFrameBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-    if (rgb == nullptr) {
-        ESP_LOGE(kTag, "No RAM for %u-byte RGB565 frame", unsigned(kFrameBytes));
-        show_status("CAMERA ERROR", "NO MEMORY");
+    jpeg_decoder_handle_t jpeg_decoder = nullptr;
+    jpeg_decode_engine_cfg_t engine_config = {};
+    engine_config.intr_priority = 0;
+    engine_config.timeout_ms = 80;
+    const esp_err_t decoder_err = jpeg_new_decoder_engine(&engine_config, &jpeg_decoder);
+    if (decoder_err != ESP_OK) {
+        ESP_LOGE(kTag, "Hardware JPEG init: %s", esp_err_to_name(decoder_err));
+        show_status("CAMERA ERROR", "JPEG ENGINE");
         return;
     }
+
+    jpeg_decode_cfg_t decode_config = {};
+    decode_config.output_format = JPEG_DECODE_OUT_FORMAT_RGB565;
+    // BGR selects the driver's little-endian RGB565 layout. I80 swaps the
+    // two bytes once when sending each pixel to the ST7796S.
+    decode_config.rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_BGR;
+    decode_config.conv_std = JPEG_YUV_RGB_CONV_STD_BT601;
 
     esp_cam_io_parl_handle_t camera_io = nullptr;
     esp_cam_sensor_io_parl_handle_t sensor = nullptr;
     if (!init_camera(identity, &camera_io, &sensor)) {
-        heap_caps_free(rgb);
+        ESP_ERROR_CHECK(jpeg_del_decoder_engine(jpeg_decoder));
         return;
     }
+    ESP_LOGI(kTag, "ESP32-S31 hardware JPEG decoder -> RGB565, full-frame LCD DMA");
 
     char camera_label[24];
     std::snprintf(camera_label, sizeof(camera_label), "PID 0X%04X", sensor->id.PID);
     uint32_t frames = 0;
     uint32_t failures = 0;
     bool error_visible = false;
+    constexpr uint32_t kPerfWindowFrames = 30;
+    uint32_t perf_frames = 0;
+    uint64_t capture_time_us = 0;
+    uint64_t decode_time_us = 0;
+    uint64_t display_time_us = 0;
+    uint64_t jpeg_bytes = 0;
+    int64_t perf_window_start_us = esp_timer_get_time();
     while (true) {
+        const int64_t capture_start_us = esp_timer_get_time();
         esp_cam_io_parl_trans_t frame = {};
         const esp_err_t receive_err = esp_cam_io_parl_receive(camera_io, &frame, 5000);
+        const int64_t capture_done_us = esp_timer_get_time();
         if (receive_err != ESP_OK) {
             ESP_LOGW(kTag, "Camera capture: %s", esp_err_to_name(receive_err));
         }
 
         esp_err_t decode_err = ESP_FAIL;
-        esp_jpeg_image_output_t output = {};
+        jpeg_decode_picture_info_t picture_info = {};
+        uint32_t output_size = 0;
+        const size_t frame_length = frame.length;
         if (receive_err == ESP_OK && frame.buffer != nullptr && frame.length > 0) {
-            esp_jpeg_image_cfg_t jpeg = {};
-            jpeg.indata = frame.buffer;
-            jpeg.indata_size = frame.length;
-            jpeg.outbuf = reinterpret_cast<uint8_t *>(rgb);
-            jpeg.outbuf_size = kFrameBytes;
-            jpeg.out_format = JPEG_IMAGE_FORMAT_RGB565;
-            jpeg.out_scale = JPEG_IMAGE_SCALE_0;
-            // Keep native uint16_t RGB565; the I80 IO swaps bytes when transmitting.
-            jpeg.flags.swap_color_bytes = 0;
-            decode_err = esp_jpeg_decode(&jpeg, &output);
+            decode_err = jpeg_decoder_get_info(frame.buffer, frame.length, &picture_info);
+            if (decode_err == ESP_OK &&
+                (picture_info.width != kFrameWidth || picture_info.height != kFrameHeight)) {
+                decode_err = ESP_ERR_INVALID_SIZE;
+            }
+            if (decode_err == ESP_OK) {
+                decode_err = jpeg_decoder_process(
+                    jpeg_decoder, &decode_config, frame.buffer, frame.length,
+                    reinterpret_cast<uint8_t *>(s_frame), kFrameBytes, &output_size);
+            }
             ESP_ERROR_CHECK(esp_cam_io_parl_free_buffer(&frame));
         } else if (frame.buffer != nullptr) {
             ESP_ERROR_CHECK(esp_cam_io_parl_free_buffer(&frame));
         }
+        const int64_t decode_done_us = esp_timer_get_time();
 
-        if (decode_err != ESP_OK || output.width != kFrameWidth ||
-            output.height != kFrameHeight || output.output_len != kFrameBytes) {
+        if (decode_err != ESP_OK || output_size != kFrameBytes) {
             if (receive_err == ESP_OK) {
-                ESP_LOGW(kTag, "JPEG decode: %s, %ux%u", esp_err_to_name(decode_err),
-                         output.width, output.height);
+                ESP_LOGW(kTag, "JPEG decode: %s, %lux%lu, output=%lu",
+                         esp_err_to_name(decode_err),
+                         static_cast<unsigned long>(picture_info.width),
+                         static_cast<unsigned long>(picture_info.height),
+                         static_cast<unsigned long>(output_size));
             }
             if (++failures == 3) {
                 show_status("CAMERA ERROR",
@@ -714,10 +761,44 @@ extern "C" void app_main(void)
                 clear_screen();
                 error_visible = false;
             }
-            display_frame(rgb);
+            display_frame(s_frame);
+            const int64_t display_done_us = esp_timer_get_time();
             failures = 0;
-            if (++frames % 30 == 0) {
-                ESP_LOGI(kTag, "Displayed %lu frames", static_cast<unsigned long>(frames));
+            ++frames;
+            ++perf_frames;
+            capture_time_us += capture_done_us - capture_start_us;
+            decode_time_us += decode_done_us - capture_done_us;
+            display_time_us += display_done_us - decode_done_us;
+            jpeg_bytes += frame_length;
+            if (perf_frames == kPerfWindowFrames) {
+                const uint64_t elapsed_us = display_done_us - perf_window_start_us;
+                const uint32_t fps_x10 = static_cast<uint32_t>(
+                    perf_frames * 10000000ULL / elapsed_us);
+                const uint32_t capture_ms_x10 = static_cast<uint32_t>(
+                    capture_time_us / (perf_frames * 100ULL));
+                const uint32_t decode_ms_x10 = static_cast<uint32_t>(
+                    decode_time_us / (perf_frames * 100ULL));
+                const uint32_t display_ms_x10 = static_cast<uint32_t>(
+                    display_time_us / (perf_frames * 100ULL));
+                ESP_LOGI(kTag,
+                         "Displayed %lu frames: %lu.%lu fps, avg capture=%lu.%lums "
+                         "decode=%lu.%lums lcd=%lu.%lums jpeg=%lu bytes",
+                         static_cast<unsigned long>(frames),
+                         static_cast<unsigned long>(fps_x10 / 10),
+                         static_cast<unsigned long>(fps_x10 % 10),
+                         static_cast<unsigned long>(capture_ms_x10 / 10),
+                         static_cast<unsigned long>(capture_ms_x10 % 10),
+                         static_cast<unsigned long>(decode_ms_x10 / 10),
+                         static_cast<unsigned long>(decode_ms_x10 % 10),
+                         static_cast<unsigned long>(display_ms_x10 / 10),
+                         static_cast<unsigned long>(display_ms_x10 % 10),
+                         static_cast<unsigned long>(jpeg_bytes / perf_frames));
+                perf_frames = 0;
+                capture_time_us = 0;
+                decode_time_us = 0;
+                display_time_us = 0;
+                jpeg_bytes = 0;
+                perf_window_start_us = display_done_us;
             }
         }
         vTaskDelay(1);

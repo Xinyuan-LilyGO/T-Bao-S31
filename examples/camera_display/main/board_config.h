@@ -24,8 +24,9 @@
 #define BOARD_LCD_D6                GPIO_NUM_37
 #define BOARD_LCD_D7                GPIO_NUM_36
 
-#define BOARD_LCD_RGB_ORDER         LCD_RGB_ELEMENT_ORDER_RGB
-#define BOARD_LCD_MIRROR_X          false
+#define BOARD_LCD_RGB_ORDER         LCD_RGB_ELEMENT_ORDER_BGR
+#define BOARD_LCD_INVERT_COLOR      1
+#define BOARD_LCD_MIRROR_X          true
 #define BOARD_LCD_MIRROR_Y          false
 
 #define BOARD_PMIC_I2C_PORT         I2C_NUM_0
@@ -68,6 +69,7 @@
 #define BOARD_CAMERA_VSYNC          GPIO_NUM_56
 #define BOARD_CAMERA_HREF           GPIO_NUM_57
 #define BOARD_CAMERA_XCLK_HZ        (20 * 1000 * 1000)
-#define BOARD_CAMERA_FRAME_WIDTH    240
-#define BOARD_CAMERA_FRAME_HEIGHT   240
-#define BOARD_CAMERA_JPEG_QUALITY   12
+#define BOARD_CAMERA_FRAME_WIDTH    320
+#define BOARD_CAMERA_FRAME_HEIGHT   320
+// OV sensor JPEG quality: lower values produce higher quality images.
+#define BOARD_CAMERA_JPEG_QUALITY   8

@@ -3,8 +3,17 @@
 This ESP-IDF 6.1 example shows the live camera image on the T-Bao-S31 ST7796S
 320x320 display. `esp_cam_io_parl` detects OV2640/OV3660 over the dedicated
 camera I2C bus (verify the supply requirements of a replacement module). The
-camera produces 240x240 JPEG frames, which are decoded to RGB565 and displayed
-in the center with a 40-pixel black border. No PSRAM is required.
+camera produces 320x320 JPEG frames. The ESP32-S31 hardware JPEG decoder writes
+RGB565 directly into an LCD DMA buffer, and the complete frame is submitted as
+one I80 transaction without application-side scaling or strip copies. JPEG
+quality is set to 8 (lower is higher quality for these sensors). The example
+keeps PSRAM disabled.
+
+For OV2640, `esp_cam_io_parl` 0.1.0 selects a CIF source window for the generic
+320x320 preset. That window is only 300x296 and can stop valid JPEG frames on
+this module. The example replaces it with a centered 600x600 crop from the
+sensor's SVGA mode and downsamples to 320x320 before arming PARLIO reception.
+OV3660 continues to use the component's normal 320x320 configuration.
 
 ## Build and flash
 
@@ -17,16 +26,17 @@ idf.py --preview build
 idf.py --preview -p <PORT> flash monitor
 ```
 
-The example uses `espressif/esp_lcd_st7796` 1.4.0 (the local ESP32-S31
-compatibility copy from `display_touch_test`),
-`haqqscripter/esp_cam_io_parl` 0.1.0, and `espressif/esp_jpeg` 1.3.1.
+The example uses the ESP-IDF 6.1 `esp_driver_jpeg` hardware driver,
+`espressif/esp_lcd_st7796` 1.4.0 (the local ESP32-S31 compatibility copy from
+`display_touch_test`), and `haqqscripter/esp_cam_io_parl` 0.1.0.
 The board has 16 MB of flash; the example sets its image header accordingly.
 
 ## Connections and diagnostics
 
 - LCD: 8-bit I80, D0..D7 = GPIO44,43,42,40,39,38,37,36;
-  DC/WR/CS/RST/BL = GPIO18/17/19/35/16. LCD X/Y mirroring is disabled to
-  match the verified orientation in `display_touch_test`.
+  DC/WR/CS/RST/BL = GPIO18/17/19/35/16. BGR element order, color inversion and
+  X mirroring are enabled for the fitted ST7796S panel; Y mirroring remains
+  disabled.
 - Camera: I2C1 SDA/SCL = GPIO3/4 at 100 kHz, RESET = GPIO45,
   D0..D7 = GPIO46..53 (module pins D2..D9), PCLK = GPIO54,
   XCLK = GPIO55, HREF = GPIO57. The module's PWDN is pulled low;
@@ -68,6 +78,10 @@ with a meter or logic analyzer. GPIO-level samples alone cannot verify signal
 rise time or actual supply voltages; external pull-ups to a suitable I/O rail
 or level shifting may be needed on the physical board.
 
-The JPEG decoder and LCD colors both use native RGB565 in memory; the I80
-driver swaps the two bytes on output. The camera's frame queue retains the
-newest frame when decoding or LCD transfers take longer than capture.
+The hardware JPEG decoder uses its little-endian RGB565 output mode; the I80
+driver swaps the two bytes once on output. The LCD is configured for BGR
+element order, `INVON` and X mirroring so camera colors and generated text
+match the fitted panel.
+The camera's frame queue retains the newest frame when decoding or LCD
+transfers take longer than capture. Every 30 displayed frames, the serial log
+prints average capture, hardware-decode and LCD transfer times plus frame rate.
