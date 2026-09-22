@@ -26,6 +26,7 @@ provided by `espressif/esp_codec_dev` 1.6.2, which is the supported codec path.
 | I2S BCLK | GPIO8 |
 | I2S LRCK | GPIO9 |
 | I2S ES7210 SDOUT -> ESP32 | GPIO10 |
+| 5 V speaker rail enable | XL9555 `0x22`, P05; high enables SY8113 `VDD5V` |
 | Speaker amplifier control | XL9555 `0x22`, P07; high enables NS4150B |
 
 ## Build
@@ -37,4 +38,3 @@ cd examples/audio_test
 idf.py --preview set-target esp32s31
 idf.py --preview build
 ```
-

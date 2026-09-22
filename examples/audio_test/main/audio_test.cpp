@@ -32,7 +32,12 @@ constexpr int kToneFrequencyHz = 1000;
 constexpr int kToneFrames = 480;
 constexpr int kToneBufferDurationMs =
     kToneFrames * 1000 / BOARD_AUDIO_SAMPLE_RATE;
-constexpr float kToneAmplitude = 0.20f;
+constexpr int kDacTestDurationMs = 5000;
+constexpr int kDacOutputVolume = 90;
+constexpr int kSpeakerRailSettleMs = 30;
+constexpr int kSpeakerAmpSettleMs = 80;
+constexpr int kSpeakerPowerDownMs = 10;
+constexpr float kToneAmplitude = 0.60f;
 constexpr float kPi = 3.14159265358979323846f;
 
 // esp_codec_dev keeps codec I2C addresses in 8-bit write-address form, while
@@ -90,7 +95,15 @@ bool probe_device(uint8_t address, const char *name)
     return false;
 }
 
-esp_err_t set_speaker_enabled(bool enabled)
+esp_err_t set_speaker_power_enabled(bool enabled)
+{
+    return esp_io_expander_set_level(
+        s_io_expander,
+        BOARD_XL9555_P05_POWER_EN_MASK,
+        enabled ? 1 : 0);
+}
+
+esp_err_t set_speaker_amp_enabled(bool enabled)
 {
     return esp_io_expander_set_level(
         s_io_expander,
@@ -98,15 +111,44 @@ esp_err_t set_speaker_enabled(bool enabled)
         enabled ? 1 : 0);
 }
 
+esp_err_t set_speaker_path_enabled(bool enabled)
+{
+    if (!enabled) {
+        const esp_err_t amp_err = set_speaker_amp_enabled(false);
+        vTaskDelay(pdMS_TO_TICKS(kSpeakerPowerDownMs));
+        const esp_err_t power_err = set_speaker_power_enabled(false);
+        return amp_err != ESP_OK ? amp_err : power_err;
+    }
+
+    esp_err_t err = set_speaker_amp_enabled(false);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = set_speaker_power_enabled(true);
+    if (err != ESP_OK) {
+        return err;
+    }
+    vTaskDelay(pdMS_TO_TICKS(kSpeakerRailSettleMs));
+    err = set_speaker_amp_enabled(true);
+    if (err != ESP_OK) {
+        set_speaker_power_enabled(false);
+        return err;
+    }
+    vTaskDelay(pdMS_TO_TICKS(kSpeakerAmpSettleMs));
+    return ESP_OK;
+}
+
 esp_err_t init_speaker_control()
 {
+    constexpr uint32_t speaker_control_mask =
+        BOARD_XL9555_P05_POWER_EN_MASK | BOARD_XL9555_P07_SPK_CTRL_MASK;
     ESP_RETURN_ON_ERROR(
         esp_io_expander_set_dir(
             s_io_expander,
-            BOARD_XL9555_P07_SPK_CTRL_MASK,
+            speaker_control_mask,
             IO_EXPANDER_OUTPUT),
         kTag, "configure speaker control");
-    return set_speaker_enabled(false);
+    return esp_io_expander_set_level(s_io_expander, speaker_control_mask, 0);
 }
 
 esp_err_t init_i2s()
@@ -228,7 +270,10 @@ bool init_es8389()
         ESP_LOGE(kTag, "ES8389 open failed");
         return false;
     }
-    if (esp_codec_dev_set_out_vol(s_es8389_device, 55) != ESP_CODEC_DEV_OK) {
+    if (esp_codec_dev_set_out_mute(s_es8389_device, false) != ESP_CODEC_DEV_OK) {
+        return false;
+    }
+    if (esp_codec_dev_set_out_vol(s_es8389_device, kDacOutputVolume) != ESP_CODEC_DEV_OK) {
         ESP_LOGE(kTag, "ES8389 volume setup failed");
         return false;
     }
@@ -474,22 +519,21 @@ bool run_dac_stage(
         return false;
     }
 
-    const esp_err_t amp_enable_err = set_speaker_enabled(true);
-    if (amp_enable_err != ESP_OK) {
+    const esp_err_t speaker_enable_err = set_speaker_path_enabled(true);
+    if (speaker_enable_err != ESP_OK) {
         s_state.dac_sound = TestResult::kFail;
         ESP_LOGE(
             kTag, "Unable to enable NS4150B: %s",
-            esp_err_to_name(amp_enable_err));
+            esp_err_to_name(speaker_enable_err));
     } else {
         s_state.dac_sound = TestResult::kManual;
-        vTaskDelay(pdMS_TO_TICKS(20));
     }
 
     const auto tone = make_tone_buffer();
     const int write_count = std::max(1, duration_ms / kToneBufferDurationMs);
     for (int i = 0; i < write_count; ++i) {
         if (poll_mode_request(requested_mode)) {
-            set_speaker_enabled(false);
+            set_speaker_path_enabled(false);
             return true;
         }
         if (esp_codec_dev_write(
@@ -500,18 +544,18 @@ bool run_dac_stage(
             s_state.dac_sound = TestResult::kFail;
             set_detail("DAC WRITE FAILED");
             ESP_LOGE(kTag, "ES8389 PCM write failed");
-            set_speaker_enabled(false);
+            set_speaker_path_enabled(false);
             publish_state();
             return false;
         }
         s_state.i2s_tx = TestResult::kPass;
     }
 
-    const esp_err_t amp_disable_err = set_speaker_enabled(false);
-    if (amp_disable_err != ESP_OK) {
+    const esp_err_t speaker_disable_err = set_speaker_path_enabled(false);
+    if (speaker_disable_err != ESP_OK) {
         ESP_LOGE(
             kTag, "Unable to disable NS4150B: %s",
-            esp_err_to_name(amp_disable_err));
+            esp_err_to_name(speaker_disable_err));
     }
     if (s_state.dac_sound != TestResult::kFail) {
         s_state.dac_sound = TestResult::kManual;
@@ -531,7 +575,7 @@ bool run_auto_mode(TestMode *requested_mode)
         return true;
     }
     return run_dac_stage(
-        2000,
+        kDacTestDurationMs,
         TestMode::kAuto,
         "AUTO 2/2 - 1 KHZ TONE",
         requested_mode);
@@ -553,7 +597,7 @@ void audio_worker(void *)
             break;
         case TestMode::kDac:
             interrupted = run_dac_stage(
-                2000,
+                kDacTestDurationMs,
                 TestMode::kDac,
                 "DAC - PLAYING 1 KHZ",
                 &requested_mode);
