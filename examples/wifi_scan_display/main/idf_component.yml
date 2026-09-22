@@ -1,0 +1,6 @@
+dependencies:
+  idf: ">=6.1"
+  espressif/esp_lcd_st7796:
+    version: "^1.4.0"
+    override_path: ../../display_touch_test/components/esp_lcd_st7796
+  lvgl/lvgl: "^9.6.0~1"
