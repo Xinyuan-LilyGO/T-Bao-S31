@@ -34,9 +34,12 @@ The board has 16 MB of flash; the example sets its image header accordingly.
 ## Connections and diagnostics
 
 - LCD: 8-bit I80, D0..D7 = GPIO44,43,42,40,39,38,37,36;
-  DC/WR/CS/RST/BL = GPIO18/17/19/35/16. BGR element order, color inversion and
-  X mirroring are enabled for the fitted ST7796S panel; Y mirroring remains
-  disabled.
+  DC/WR/CS/RST/BL = GPIO18/17/19/35/16. BGR element order and color inversion
+  are enabled. The panel remains in its verified full-screen address mode
+  (no XY swap, X mirror, zero gap). Each 320x320 RGB565 camera or status frame
+  is rotated clockwise by 90 degrees in place before one full-screen DMA
+  transfer. This avoids the cropped/overlapping address window produced by
+  applying ST7796S hardware rotation to this 320x320 panel revision.
 - Camera: I2C1 SDA/SCL = GPIO3/4 at 100 kHz, RESET = GPIO45,
   D0..D7 = GPIO46..53 (module pins D2..D9), PCLK = GPIO54,
   XCLK = GPIO55, HREF = GPIO57. The module's PWDN is pulled low;

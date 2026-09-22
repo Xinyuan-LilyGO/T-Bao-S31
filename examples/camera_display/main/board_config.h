@@ -26,8 +26,13 @@
 
 #define BOARD_LCD_RGB_ORDER         LCD_RGB_ELEMENT_ORDER_BGR
 #define BOARD_LCD_INVERT_COLOR      1
+#define BOARD_LCD_SWAP_XY           false
+// Keep the panel in the same full-screen address orientation used by the
+// working audio UI. Camera/status frames are rotated in the RGB565 buffer.
 #define BOARD_LCD_MIRROR_X          true
 #define BOARD_LCD_MIRROR_Y          false
+#define BOARD_LCD_X_GAP             0
+#define BOARD_LCD_Y_GAP             0
 
 #define BOARD_PMIC_I2C_PORT         I2C_NUM_0
 #define BOARD_PMIC_SDA              GPIO_NUM_0
@@ -71,5 +76,5 @@
 #define BOARD_CAMERA_XCLK_HZ        (20 * 1000 * 1000)
 #define BOARD_CAMERA_FRAME_WIDTH    320
 #define BOARD_CAMERA_FRAME_HEIGHT   320
-// OV sensor JPEG quality: lower values produce higher quality images.
+// OV sensor JPEG quality: lower values produce higher quality images. 0~63, default 8.
 #define BOARD_CAMERA_JPEG_QUALITY   8

@@ -29,9 +29,11 @@ constexpr int kFrameWidth = BOARD_CAMERA_FRAME_WIDTH;
 constexpr int kFrameHeight = BOARD_CAMERA_FRAME_HEIGHT;
 constexpr int kFrameX = (BOARD_LCD_H_RES - kFrameWidth) / 2;
 constexpr int kFrameY = (BOARD_LCD_V_RES - kFrameHeight) / 2;
-constexpr size_t kFrameBytes = kFrameWidth * kFrameHeight * sizeof(uint16_t);
+constexpr size_t kFramePixels = kFrameWidth * kFrameHeight;
+constexpr size_t kFrameBytes = kFramePixels * sizeof(uint16_t);
 constexpr size_t kStripPixels = BOARD_LCD_H_RES * BOARD_LCD_DMA_LINES;
 static_assert(kFrameWidth == BOARD_LCD_H_RES && kFrameHeight == BOARD_LCD_V_RES);
+static_assert(kFrameWidth == kFrameHeight);
 static_assert(kFrameWidth % 16 == 0 && kFrameHeight % 16 == 0);
 constexpr int kI2cTimeoutMs = 100;
 constexpr uint8_t kPmicRevisionReg = 0x00;
@@ -101,6 +103,27 @@ void clear_screen()
     }
 }
 
+void rotate_frame_clockwise(uint16_t *pixels)
+{
+    // Transpose, then reverse every row: source (x, y) -> (N - 1 - y, x).
+    for (int y = 0; y < kFrameHeight; ++y) {
+        for (int x = y + 1; x < kFrameWidth; ++x) {
+            std::swap(pixels[y * kFrameWidth + x],
+                      pixels[x * kFrameWidth + y]);
+        }
+    }
+    for (int y = 0; y < kFrameHeight; ++y) {
+        uint16_t *row = pixels + y * kFrameWidth;
+        std::reverse(row, row + kFrameWidth);
+    }
+}
+
+void display_frame(uint16_t *pixels)
+{
+    rotate_frame_clockwise(pixels);
+    flush_bitmap(kFrameX, kFrameY, kFrameWidth, kFrameHeight, pixels);
+}
+
 const uint8_t *glyph(char c)
 {
     if (c >= '0' && c <= '9') {
@@ -112,9 +135,8 @@ const uint8_t *glyph(char c)
     return nullptr;
 }
 
-void draw_text(int y, const char *text, uint16_t color)
+void draw_text(uint16_t *canvas, int y, const char *text, uint16_t color)
 {
-    std::fill_n(s_strip, kStripPixels, uint16_t{0});
     constexpr int char_width = 12;
     const int length = std::min<int>(std::strlen(text), BOARD_LCD_H_RES / char_width);
     const int start_x = (BOARD_LCD_H_RES - length * char_width) / 2;
@@ -128,23 +150,24 @@ void draw_text(int y, const char *text, uint16_t color)
             for (int column = 0; column < 5; ++column) {
                 if (rows[row] & (1U << (4 - column))) {
                     const int pixel = start_x + i * char_width + column * 2;
-                    s_strip[(row * 2) * BOARD_LCD_H_RES + pixel] = color;
-                    s_strip[(row * 2) * BOARD_LCD_H_RES + pixel + 1] = color;
-                    s_strip[(row * 2 + 1) * BOARD_LCD_H_RES + pixel] = color;
-                    s_strip[(row * 2 + 1) * BOARD_LCD_H_RES + pixel + 1] = color;
+                    const int pixel_y = y + row * 2;
+                    canvas[pixel_y * BOARD_LCD_H_RES + pixel] = color;
+                    canvas[pixel_y * BOARD_LCD_H_RES + pixel + 1] = color;
+                    canvas[(pixel_y + 1) * BOARD_LCD_H_RES + pixel] = color;
+                    canvas[(pixel_y + 1) * BOARD_LCD_H_RES + pixel + 1] = color;
                 }
             }
         }
     }
-    flush_bitmap(0, y, BOARD_LCD_H_RES, BOARD_LCD_DMA_LINES, s_strip);
 }
 
 void show_status(const char *heading, const char *detail, const char *identity = "")
 {
-    clear_screen();
-    draw_text(112, heading, 0xFFFF);
-    draw_text(144, detail, 0xFFE0);
-    draw_text(176, identity, 0xFFFF);
+    std::fill_n(s_frame, kFramePixels, uint16_t{0});
+    draw_text(s_frame, 112, heading, 0xFFFF);
+    draw_text(s_frame, 144, detail, 0xFFE0);
+    draw_text(s_frame, 176, identity, 0xFFFF);
+    display_frame(s_frame);
 }
 
 void init_lcd()
@@ -200,8 +223,9 @@ void init_lcd()
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, BOARD_LCD_INVERT_COLOR));
+    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(s_panel, BOARD_LCD_SWAP_XY));
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, BOARD_LCD_MIRROR_X, BOARD_LCD_MIRROR_Y));
-    ESP_ERROR_CHECK(esp_lcd_panel_set_gap(s_panel, 0, 0));
+    ESP_ERROR_CHECK(esp_lcd_panel_set_gap(s_panel, BOARD_LCD_X_GAP, BOARD_LCD_Y_GAP));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
 
     s_strip = static_cast<uint16_t *>(esp_lcd_i80_alloc_draw_buffer(
@@ -601,11 +625,6 @@ bool init_camera(const CameraIdentity &identity, esp_cam_io_parl_handle_t *out_i
     return true;
 }
 
-void display_frame(const uint16_t *pixels)
-{
-    flush_bitmap(kFrameX, kFrameY, kFrameWidth, kFrameHeight, pixels);
-}
-
 } // namespace
 
 extern "C" void app_main(void)
@@ -698,7 +717,7 @@ extern "C" void app_main(void)
         ESP_ERROR_CHECK(jpeg_del_decoder_engine(jpeg_decoder));
         return;
     }
-    ESP_LOGI(kTag, "ESP32-S31 hardware JPEG decoder -> RGB565, full-frame LCD DMA");
+    ESP_LOGI(kTag, "ESP32-S31 hardware JPEG decoder -> RGB565, software CW90, full-frame LCD DMA");
 
     char camera_label[24];
     std::snprintf(camera_label, sizeof(camera_label), "PID 0X%04X", sensor->id.PID);
