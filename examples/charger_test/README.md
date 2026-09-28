@@ -4,8 +4,10 @@ This ESP-IDF 6.1 example exercises the T-Bao-S31 SGM41529 two-cell charger
 and shows the charging process on the 320x320 ST7796S display.
 
 The firmware verifies the part ID at I2C address `0x6B` before it enables the
-active-low `nCE` signal through XL9555 P02. It then enables the continuous ADC
-and refreshes the screen every 500 ms.
+active-low `nCE` signal through XL9555 P02. It enables the continuous ADC first,
+checks that VBAT is plausible for a protected 2-series pack, verifies the
+programmed registers, and only then enables charging. The screen refreshes every
+500 ms.
 
 ## Displayed information
 
@@ -15,13 +17,14 @@ and refreshes the screen every 500 ms.
 - Programmed limits: charge voltage, charge current, input current,
   pre-charge current, and termination current.
 - Input source, NTC state and TS percentage, IINDPM/VINDPM, thermal regulation,
-  register/pin power-good state, and current charger faults.
+  register/pin power-good state, nCE/EN_CHG/EN_HIZ state, and charger faults.
 - SGM41529 part ID and revision. An unexpected part ID is shown on screen and
   charging remains disabled.
 
 If three consecutive monitoring reads fail, the firmware deasserts `nCE` and
 retries initialization. The serial console also records state transitions and
-a full measurement line every five seconds.
+a full measurement line every five seconds. Key raw registers are printed after
+configuration and with periodic status logs.
 
 Peripheral initialization errors are logged and left on the display instead
 of being passed to `ESP_ERROR_CHECK`, so a missing I2C device does not create a
@@ -58,8 +61,14 @@ such as a 500 mA SDP result are retained.
 The SGM41529 is a two-cell Li-ion/Li-polymer charger. Before flashing, verify
 that the connected pack is a protected 2-series pack rated for an 8.40 V charge
 voltage and the configured currents. Reduce the constants in `board_config.h`
-when the battery data sheet requires lower limits. Do not use this profile for
-single-cell, LiFePO4, damaged, swollen, or unidentified batteries.
+when the battery data sheet requires lower limits. The charger cannot be set to
+4.20 V: its supported VREG range is 6.80 V to 9.20 V. Do not use this profile
+for single-cell, LiFePO4, damaged, swollen, or unidentified batteries.
+
+For bench safety, the example blocks charging when VBAT is outside 5.00 V to
+8.60 V. A reading in the normal single-cell range is reported as a likely 1S
+battery connection. Do not lower this guard to make a 1S battery charge; use a
+protected 2S pack or redesign the board around a suitable 1S charger.
 
 Run the first test on a current-limited bench supply or a known USB power
 source. Monitor battery temperature and disconnect power immediately if the

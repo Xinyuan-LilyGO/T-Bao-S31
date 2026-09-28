@@ -39,7 +39,13 @@ struct ChargerTestState {
     bool data_valid = false;
     bool device_present = false;
     bool part_id_valid = false;
+    bool configuration_valid = false;
     bool charge_enabled = false;
+    bool charge_pin_enabled = false;
+    bool register_charge_enabled = false;
+    bool high_impedance_mode = false;
+    bool battery_voltage_safe = false;
+    bool single_cell_suspected = false;
     bool adc_enabled = false;
     bool power_good = false;
     bool power_good_pin = false;

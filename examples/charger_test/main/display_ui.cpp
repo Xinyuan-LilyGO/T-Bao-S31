@@ -397,6 +397,12 @@ StatusVisual status_visual(const ChargerTestState &state)
             lv_color_hex(0xB54708),
             lv_color_hex(0xFFFAEB)};
     }
+    if (!state.configuration_valid || !state.battery_voltage_safe) {
+        return {
+            LV_SYMBOL_CLOSE,
+            lv_color_hex(0xB42318),
+            lv_color_hex(0xFEF3F2)};
+    }
     if (state.phase == ChargePhase::kDone) {
         return {
             LV_SYMBOL_OK,
@@ -463,22 +469,22 @@ const char *source_text(InputSource source)
     }
 }
 
-const char *ntc_text(NtcState state)
+const char *ntc_short_text(NtcState state)
 {
     switch (state) {
     case NtcState::kNormal:
-        return "NORMAL";
+        return "N";
     case NtcState::kWarm:
-        return "WARM";
+        return "W";
     case NtcState::kCool:
-        return "COOL";
+        return "C";
     case NtcState::kCold:
         return "COLD";
     case NtcState::kHot:
         return "HOT";
     case NtcState::kUnknown:
     default:
-        return "UNKNOWN";
+        return "?";
     }
 }
 
@@ -698,15 +704,17 @@ void display_ui_update(const ChargerTestState &state)
     }
     lv_label_set_text_fmt(
         s_flags_label,
-        "TS %s %d.%d%% | DPM %s%s | PG %d/%d | C%d",
-        ntc_text(state.ntc_state),
+        "TS%s %d.%d%% | D%s%s | CE%d/%d H%d | PG%d/%d",
+        ntc_short_text(state.ntc_state),
         state.ts_deci_percent / 10,
         state.ts_deci_percent % 10,
         dpm,
         state.thermal_regulation ? "+T" : "",
+        state.charge_pin_enabled,
+        state.register_charge_enabled,
+        state.high_impedance_mode,
         state.power_good,
-        state.power_good_pin,
-        state.charge_enabled);
+        state.power_good_pin);
 
     xSemaphoreGive(s_lvgl_mutex);
 }
