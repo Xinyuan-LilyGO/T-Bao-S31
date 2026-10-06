@@ -40,8 +40,10 @@
 #define BOARD_I2C_SDA                    GPIO_NUM_0
 #define BOARD_I2C_SCL                    GPIO_NUM_1
 #define BOARD_XL9555_I2C_ADDR            0x22
-#define BOARD_XL9555_P05_POWER_EN        (1U << 5)
-#define BOARD_XL9555_P11_DRV_EN          (1U << 11)
+#define BOARD_XL9555_PORT_PIN_MASK(port, pin) \
+    (1U << ((port) * 8 + (pin)))
+#define BOARD_XL9555_P05_POWER_EN        BOARD_XL9555_PORT_PIN_MASK(0, 5)
+#define BOARD_XL9555_P11_DRV_EN          BOARD_XL9555_PORT_PIN_MASK(1, 1)
 
 // T-Bao-S31 motor/servo control signals.
 #define BOARD_SERVO_PWM                  GPIO_NUM_5

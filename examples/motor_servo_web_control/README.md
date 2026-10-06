@@ -20,6 +20,11 @@ verified full-screen controller configuration keeps hardware XY swap disabled.
 | DRV8833 motor B input 1 | `DRV_BIN1` | 13 |
 | DRV8833 motor B input 2 | `DRV_BIN2` | 12 |
 
+XL9555 register masks are linear: P00-P07 use bits 0-7 and P10-P17 use
+bits 8-15. Therefore board signal `P11` (port 1, pin 1) uses mask bit 9,
+not bit 11. Using bit 11 leaves `DRV_EN` in input mode and the DRV8833 in
+sleep, even though web commands are accepted.
+
 Motor PWM runs at 20 kHz. A positive command drives input 1 with PWM while
 input 2 stays low; a negative command swaps those inputs. A zero command keeps
 both inputs low so the motor coasts.
@@ -36,6 +41,9 @@ endpoint or the servo strains, reduce `kServoPulseMinUs` and
 - XL9555 P11 starts low while all four DRV8833 inputs are initialized to zero,
   then goes high and remains enabled. Motor stop and failsafe operations keep
   AIN1, AIN2, BIN1, and BIN2 low instead of turning P11 off.
+- Startup reads P05 and P11 back from the XL9555 input register. An enable-line
+  wiring or register-mapping fault now stops initialization with an explicit
+  `actuator enable readback mismatch` log.
 - Use a motor supply sized for the connected motors and the DRV8833 board.
 - Connect the controller, servo supply, and motor driver grounds together.
 - Keep wheels or linkages unloaded during the first test.

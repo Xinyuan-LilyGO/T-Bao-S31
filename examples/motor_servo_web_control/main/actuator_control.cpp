@@ -177,10 +177,28 @@ esp_err_t initialize_expander_controls()
         "enable servo power and motor driver");
 
     vTaskDelay(pdMS_TO_TICKS(kActuatorPowerSettleMs));
+
+    uint32_t enable_levels = 0;
+    ESP_RETURN_ON_ERROR(
+        esp_io_expander_get_level(
+            s_xl9555, kEnableMask, &enable_levels),
+        kTag,
+        "read actuator enables");
+    ESP_RETURN_ON_FALSE(
+        (enable_levels & kEnableMask) == kEnableMask,
+        ESP_ERR_INVALID_STATE,
+        kTag,
+        "actuator enable readback mismatch: expected=0x%04" PRIX32
+        ", actual=0x%04" PRIX32,
+        kEnableMask,
+        enable_levels);
+
     ESP_LOGI(
         kTag,
-        "Servo power and motor driver enabled through XL9555 P05/P11 (0x%02X)",
-        BOARD_XL9555_I2C_ADDR);
+        "Servo power and motor driver enabled through XL9555 P05/P11 "
+        "(addr=0x%02X, mask=0x%04" PRIX32 ")",
+        BOARD_XL9555_I2C_ADDR,
+        kEnableMask);
     return ESP_OK;
 }
 
