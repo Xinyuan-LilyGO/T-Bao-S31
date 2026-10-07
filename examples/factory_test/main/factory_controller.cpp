@@ -423,6 +423,10 @@ bool execute_module(const ModuleDescriptor &module)
         s_active_test.store(module.id, std::memory_order_relaxed);
         s_phase.store(ControllerPhase::kRunning, std::memory_order_relaxed);
         set_status(&record, FactoryTestStatus::kRunning);
+        ESP_LOGI(
+            kTag, "Controller stack minimum free before %s: %lu bytes",
+            factory_test_id_name(module.id),
+            static_cast<unsigned long>(uxTaskGetStackHighWaterMark(nullptr)));
         board_ui_show_status(module.title, "Running automatic checks", factory_test_id_name(module.id));
         const int64_t attempt_start_us = esp_timer_get_time();
 
@@ -478,6 +482,11 @@ bool execute_module(const ModuleDescriptor &module)
                 }
             }
         }
+
+        ESP_LOGI(
+            kTag, "Controller stack minimum free after %s: %lu bytes",
+            factory_test_id_name(module.id),
+            static_cast<unsigned long>(uxTaskGetStackHighWaterMark(nullptr)));
 
         record.duration_ms += static_cast<uint32_t>(
             (esp_timer_get_time() - attempt_start_us) / 1000);

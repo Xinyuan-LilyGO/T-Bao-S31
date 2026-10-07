@@ -24,6 +24,8 @@ constexpr int kFramesPerBuffer = 960;
 constexpr int kToneFrames = 480;
 constexpr float kPi = 3.14159265358979323846f;
 
+static_assert(kToneFrames <= kFramesPerBuffer);
+
 static_assert(
     ES8389_CODEC_DEFAULT_ADDR == (BOARD_ES8389_ADDR << 1),
     "ES8389 address mismatch");
@@ -42,6 +44,7 @@ struct AudioResources {
 };
 
 AudioResources s_audio = {};
+std::array<int16_t, kFramesPerBuffer * 2> s_pcm_buffer = {};
 
 float amplitude_to_dbfs(long double amplitude)
 {
@@ -240,7 +243,7 @@ esp_err_t microphone_test_run(
         return ESP_FAIL;
     }
 
-    std::array<int16_t, kFramesPerBuffer * 2> samples = {};
+    auto &samples = s_pcm_buffer;
     std::array<long double, 2> square_sum = {};
     std::array<uint64_t, 2> nonzero = {};
     std::array<uint64_t, 2> clipped = {};
@@ -356,7 +359,7 @@ esp_err_t speaker_test_run(
         return ESP_FAIL;
     }
 
-    std::array<int16_t, kToneFrames * 2> tone = {};
+    auto &tone = s_pcm_buffer;
     for (int frame = 0; frame < kToneFrames; ++frame) {
         const int16_t value = static_cast<int16_t>(
             std::sin(2.0f * kPi * 1000.0f * frame / BOARD_AUDIO_SAMPLE_RATE) *
@@ -368,7 +371,8 @@ esp_err_t speaker_test_run(
     int writes = 0;
     for (; writes < 300; ++writes) {
         if (esp_codec_dev_write(
-                s_audio.device, tone.data(), tone.size() * sizeof(int16_t)) !=
+                s_audio.device, tone.data(),
+                kToneFrames * 2 * sizeof(int16_t)) !=
             ESP_CODEC_DEV_OK) {
             std::snprintf(record->error_code, sizeof(record->error_code), "PCM_WRITE_FAILED");
             std::snprintf(record->detail, sizeof(record->detail), "ES8389 PCM write failed");

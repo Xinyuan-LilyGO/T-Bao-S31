@@ -21,6 +21,7 @@ constexpr char kTestFile[] = BOARD_SD_MOUNT_POINT "/tbao_factory_test.bin";
 constexpr size_t kTestBytes = 64 * 1024;
 constexpr size_t kChunkBytes = 4096;
 sdmmc_card_t *s_card = nullptr;
+std::array<uint8_t, kChunkBytes> s_io_buffer = {};
 
 uint8_t pattern_byte(size_t offset)
 {
@@ -81,7 +82,7 @@ bool write_pattern()
     if (file == nullptr) {
         return false;
     }
-    std::array<uint8_t, kChunkBytes> chunk = {};
+    auto &chunk = s_io_buffer;
     for (size_t offset = 0; offset < kTestBytes; offset += chunk.size()) {
         for (size_t i = 0; i < chunk.size(); ++i) {
             chunk[i] = pattern_byte(offset + i);
@@ -101,7 +102,7 @@ bool verify_pattern()
     if (file == nullptr) {
         return false;
     }
-    std::array<uint8_t, kChunkBytes> chunk = {};
+    auto &chunk = s_io_buffer;
     bool ok = true;
     for (size_t offset = 0; offset < kTestBytes && ok; offset += chunk.size()) {
         if (std::fread(chunk.data(), 1, chunk.size(), file) != chunk.size()) {
