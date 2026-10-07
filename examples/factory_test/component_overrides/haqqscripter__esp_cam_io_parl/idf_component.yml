@@ -1,0 +1,24 @@
+dependencies:
+  idf: '>=5.4'
+description: Interface DVP cameras with the Parallel IO peripheral on ESP32 compatible
+  driver for OV2640, NT99141, OV3660 and OV5640 image sensors.
+documentation: https://github.com/HaqqScripter/esp_cam_io_parl/tree/master/README.md
+issues: https://github.com/HaqqScripter/esp_cam_io_parl/issues
+license: Apache-2.0
+repository: https://github.com/HaqqScripter/esp_cam_io_parl.git
+tags:
+- esp32
+- camera
+- esp32-cam
+- parlio
+- esp32-cam-parlio
+targets:
+- esp32c6
+- esp32h2
+- esp32p4
+- esp32c5
+- esp32h4
+- esp32h21
+- esp32s31
+url: https://github.com/HaqqScripter/esp_cam_io_parl
+version: 0.1.1

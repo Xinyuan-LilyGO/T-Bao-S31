@@ -6,5 +6,7 @@ dependencies:
   lambage/esp_lcd_touch_ft6336u: "^1.0.8"
   sheldonix/esp_io_expander_xl9555: "^0.8.0"
   espressif/esp_codec_dev: "^1.6.2"
-  haqqscripter/esp_cam_io_parl: "^0.1.0"
+  haqqscripter/esp_cam_io_parl:
+    version: "^0.1.0"
+    override_path: ../component_overrides/haqqscripter__esp_cam_io_parl
   lvgl/lvgl: "^9.6.0~1"

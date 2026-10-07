@@ -355,22 +355,6 @@ esp_err_t init_camera_driver()
     return ESP_OK;
 }
 
-void rotate_clockwise(uint16_t *pixels)
-{
-    for (int y = 0; y < kFrameHeight; ++y) {
-        for (int x = y + 1; x < kFrameWidth; ++x) {
-            std::swap(
-                pixels[y * kFrameWidth + x],
-                pixels[x * kFrameWidth + y]);
-        }
-    }
-    for (int y = 0; y < kFrameHeight; ++y) {
-        std::reverse(
-            pixels + y * kFrameWidth,
-            pixels + (y + 1) * kFrameWidth);
-    }
-}
-
 void stop_xclk()
 {
     if (s_xclk_channel_configured) {
@@ -409,33 +393,79 @@ void stop_xclk()
     }
 }
 
+void log_cleanup_error(const char *operation, esp_err_t error)
+{
+    if (error != ESP_OK) {
+        ESP_LOGE(kTag, "%s: %s", operation, esp_err_to_name(error));
+    }
+}
+
 void stop_camera_hardware()
 {
+    stop_xclk();
+    if (s_camera_io != nullptr || s_sensor != nullptr) {
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+
+    if (s_sensor != nullptr && s_camera_io != nullptr) {
+        const esp_err_t err = esp_cam_sensor_io_parl_disconnect();
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            log_cleanup_error("disconnect camera sensor", err);
+        }
+    }
     if (s_camera_io != nullptr) {
-        esp_cam_io_parl_disable(s_camera_io);
-        esp_cam_del_io_parl(s_camera_io);
-        s_camera_io = nullptr;
+        const esp_err_t disable_error = esp_cam_io_parl_disable(s_camera_io);
+        if (disable_error != ESP_OK &&
+            disable_error != ESP_ERR_INVALID_STATE) {
+            log_cleanup_error("disable camera PARLIO", disable_error);
+        } else {
+            const esp_err_t delete_error = esp_cam_del_io_parl(s_camera_io);
+            if (delete_error == ESP_OK) {
+                s_camera_io = nullptr;
+            } else {
+                log_cleanup_error("delete camera PARLIO", delete_error);
+            }
+        }
     }
     if (s_sensor != nullptr) {
-        esp_cam_del_sensor_io_parl();
-        s_sensor = nullptr;
+        const esp_err_t err = esp_cam_del_sensor_io_parl();
+        if (err == ESP_OK) {
+            s_sensor = nullptr;
+        } else {
+            log_cleanup_error("delete camera sensor", err);
+        }
     }
     if (s_decoder != nullptr) {
-        jpeg_del_decoder_engine(s_decoder);
-        s_decoder = nullptr;
+        const esp_err_t err = jpeg_del_decoder_engine(s_decoder);
+        if (err == ESP_OK) {
+            s_decoder = nullptr;
+        } else {
+            log_cleanup_error("delete JPEG decoder", err);
+        }
     }
     if (s_camera_bus != nullptr) {
-        i2c_del_master_bus(s_camera_bus);
-        s_camera_bus = nullptr;
+        const esp_err_t err = i2c_del_master_bus(s_camera_bus);
+        if (err == ESP_OK) {
+            s_camera_bus = nullptr;
+        } else {
+            log_cleanup_error("delete camera I2C bus", err);
+        }
     }
-    stop_xclk();
     if (s_pmic != nullptr) {
         uint8_t enabled = 0;
-        if (read_pmic(kPmicEnable, &enabled) == ESP_OK) {
-            write_pmic_verified(kPmicEnable, enabled & ~kCameraRails);
+        esp_err_t err = read_pmic(kPmicEnable, &enabled);
+        if (err == ESP_OK) {
+            err = write_pmic_verified(kPmicEnable, enabled & ~kCameraRails);
         }
-        i2c_master_bus_rm_device(s_pmic);
-        s_pmic = nullptr;
+        if (err != ESP_OK) {
+            log_cleanup_error("disable camera power rails", err);
+        }
+        err = i2c_master_bus_rm_device(s_pmic);
+        if (err == ESP_OK) {
+            s_pmic = nullptr;
+        } else {
+            log_cleanup_error("remove camera PMIC", err);
+        }
     }
 }
 
@@ -631,7 +661,6 @@ esp_err_t camera_test_run(
         }
         failures = 0;
         ++frames;
-        rotate_clockwise(s_frame);
         board_ui_show_camera_frame(
             s_frame, kFrameWidth, kFrameHeight,
             FactoryTestId::kCamera, false);
@@ -692,4 +721,9 @@ void camera_test_cleanup()
         heap_caps_free(s_frame);
         s_frame = nullptr;
     }
+    const uint32_t frame_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    ESP_LOGI(
+        kTag, "Cleanup complete; free=%u largest=%u",
+        static_cast<unsigned>(heap_caps_get_free_size(frame_caps)),
+        static_cast<unsigned>(heap_caps_get_largest_free_block(frame_caps)));
 }

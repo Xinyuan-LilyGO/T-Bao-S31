@@ -38,14 +38,12 @@ dependencies:
       type: service
     version: 1.2.1
   haqqscripter/esp_cam_io_parl:
-    component_hash: 77376d21bd3792fb9d04c81ce9055156b21ad4ac495cd93c2a9a40774071cd16
     dependencies:
     - name: idf
-      require: private
       version: '>=5.4'
     source:
-      registry_url: https://components.espressif.com/
-      type: service
+      path: component_overrides/haqqscripter__esp_cam_io_parl
+      type: local
     targets:
     - esp32c6
     - esp32h2
@@ -126,6 +124,6 @@ direct_dependencies:
 - lambage/esp_lcd_touch_ft6336u
 - lvgl/lvgl
 - sheldonix/esp_io_expander_xl9555
-manifest_hash: ef49177b4cffcc01a4871400473cac9275478709c7da456457a68eefd92b97f2
+manifest_hash: 372a3e1d50b38c3ada2273cc23eb809281acfe0e8ec8bf2f6c4b554ca71e9548
 target: esp32s31
 version: 3.0.0
