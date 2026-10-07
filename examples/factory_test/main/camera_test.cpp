@@ -1,6 +1,7 @@
 #include "factory_tests.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -27,8 +28,16 @@ namespace {
 
 constexpr char kTag[] = "factory_camera";
 constexpr int kI2cTimeoutMs = 100;
-constexpr size_t kFramePixels = BOARD_LCD_H_RES * BOARD_LCD_V_RES;
+constexpr int kProbeTimeoutMs = 10;
+constexpr uint16_t kFrameWidth = 240;
+constexpr uint16_t kFrameHeight = 240;
+constexpr size_t kFramePixels = kFrameWidth * kFrameHeight;
 constexpr size_t kFrameBytes = kFramePixels * sizeof(uint16_t);
+constexpr size_t kJpegBufferAlignment = 16;
+static_assert(kFrameWidth % 16 == 0 && kFrameHeight % 16 == 0);
+constexpr ledc_mode_t kXclkSpeedMode = LEDC_LOW_SPEED_MODE;
+constexpr ledc_timer_t kXclkTimer = LEDC_TIMER_0;
+constexpr ledc_channel_t kXclkChannel = LEDC_CHANNEL_0;
 constexpr uint8_t kPmicRevision = 0x00;
 constexpr uint8_t kPmicDvdd = 0x03;
 constexpr uint8_t kPmicDovdd = 0x05;
@@ -44,12 +53,14 @@ esp_cam_io_parl_handle_t s_camera_io = nullptr;
 esp_cam_sensor_io_parl_handle_t s_sensor = nullptr;
 jpeg_decoder_handle_t s_decoder = nullptr;
 uint16_t *s_frame = nullptr;
-bool s_xclk_active = false;
+bool s_xclk_timer_configured = false;
+bool s_xclk_channel_configured = false;
 
 struct CameraIdentity {
     uint8_t address = 0;
     uint16_t pid = 0;
     bool pid_valid = false;
+    esp_err_t pid_error = ESP_ERR_NOT_SUPPORTED;
 };
 
 esp_err_t read_pmic(uint8_t reg, uint8_t *value)
@@ -114,20 +125,23 @@ esp_err_t configure_camera_power(FactoryCameraProfile profile)
 esp_err_t prepare_xclk_and_reset()
 {
     ledc_timer_config_t timer = {};
-    timer.speed_mode = LEDC_LOW_SPEED_MODE;
+    timer.speed_mode = kXclkSpeedMode;
     timer.duty_resolution = LEDC_TIMER_1_BIT;
-    timer.timer_num = LEDC_TIMER_0;
+    timer.timer_num = kXclkTimer;
     timer.freq_hz = BOARD_CAMERA_XCLK_HZ;
-    timer.clk_cfg = LEDC_AUTO_CLK;
+    // ESP32-S31 LEDC timers share a global source. Use the same PLL source as
+    // the motor and servo tests so a prior test cannot block camera retries.
+    timer.clk_cfg = LEDC_USE_PLL_DIV_CLK;
     ESP_RETURN_ON_ERROR(ledc_timer_config(&timer), kTag, "configure XCLK timer");
+    s_xclk_timer_configured = true;
     ledc_channel_config_t channel = {};
     channel.gpio_num = BOARD_CAMERA_XCLK;
-    channel.speed_mode = LEDC_LOW_SPEED_MODE;
-    channel.channel = LEDC_CHANNEL_0;
-    channel.timer_sel = LEDC_TIMER_0;
+    channel.speed_mode = kXclkSpeedMode;
+    channel.channel = kXclkChannel;
+    channel.timer_sel = kXclkTimer;
     channel.duty = 1;
     ESP_RETURN_ON_ERROR(ledc_channel_config(&channel), kTag, "configure XCLK");
-    s_xclk_active = true;
+    s_xclk_channel_configured = true;
     gpio_config_t reset = {};
     reset.pin_bit_mask = 1ULL << BOARD_CAMERA_RESET;
     reset.mode = GPIO_MODE_OUTPUT;
@@ -153,16 +167,73 @@ esp_err_t read_sensor_register(
         value, 1, kI2cTimeoutMs);
 }
 
+esp_err_t read_camera_pid(
+    i2c_master_dev_handle_t device,
+    CameraIdentity *identity)
+{
+    uint8_t high = 0;
+    uint8_t low = 0;
+    esp_err_t err = ESP_ERR_NOT_SUPPORTED;
+    if (identity->address == ESP_CAM_IO_PARL_OV2640_SCCB_ADDR) {
+        const uint8_t bank[] = {0xFF, 0x01};
+        err = i2c_master_transmit(device, bank, sizeof(bank), kI2cTimeoutMs);
+        if (err == ESP_OK) {
+            err = read_sensor_register(device, 0x0A, false, &high);
+        }
+        if (err == ESP_OK) {
+            err = read_sensor_register(device, 0x0B, false, &low);
+        }
+    } else if (identity->address == ESP_CAM_IO_PARL_OV3660_SCCB_ADDR) {
+        err = read_sensor_register(device, 0x300A, true, &high);
+        if (err == ESP_OK) {
+            err = read_sensor_register(device, 0x300B, true, &low);
+        }
+    } else if (identity->address == ESP_CAM_IO_PARL_NT99141_SCCB_ADDR) {
+        const uint8_t bank[] = {0x30, 0x08, 0x01};
+        err = i2c_master_transmit(device, bank, sizeof(bank), kI2cTimeoutMs);
+        if (err == ESP_OK) {
+            err = read_sensor_register(device, 0x3000, true, &high);
+        }
+        if (err == ESP_OK) {
+            err = read_sensor_register(device, 0x3001, true, &low);
+        }
+    }
+    if (err == ESP_OK) {
+        identity->pid = static_cast<uint16_t>((high << 8) | low);
+        identity->pid_valid = true;
+    }
+    identity->pid_error = err;
+    return err;
+}
+
 esp_err_t identify_camera(CameraIdentity *identity)
 {
     if (identity == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
     *identity = {};
-    for (uint8_t address : {uint8_t{0x30}, uint8_t{0x3C}}) {
+    constexpr std::array<uint8_t, 3> known_addresses = {
+        ESP_CAM_IO_PARL_OV2640_SCCB_ADDR,
+        ESP_CAM_IO_PARL_OV3660_SCCB_ADDR,
+        ESP_CAM_IO_PARL_NT99141_SCCB_ADDR,
+    };
+    for (uint8_t address : known_addresses) {
         if (i2c_master_probe(s_camera_bus, address, kI2cTimeoutMs) == ESP_OK) {
             identity->address = address;
             break;
+        }
+    }
+    if (identity->address == 0) {
+        for (uint16_t address = 0x08; address <= 0x77; ++address) {
+            if (std::find(
+                    known_addresses.begin(), known_addresses.end(),
+                    static_cast<uint8_t>(address)) != known_addresses.end()) {
+                continue;
+            }
+            if (i2c_master_probe(s_camera_bus, address, kProbeTimeoutMs) == ESP_OK) {
+                identity->address = static_cast<uint8_t>(address);
+                break;
+            }
         }
     }
     if (identity->address == 0) {
@@ -176,42 +247,51 @@ esp_err_t identify_camera(CameraIdentity *identity)
     ESP_RETURN_ON_ERROR(
         i2c_master_bus_add_device(s_camera_bus, &config, &device),
         kTag, "add camera sensor");
-    uint8_t high = 0;
-    uint8_t low = 0;
-    esp_err_t err = ESP_OK;
-    if (identity->address == 0x30) {
-        const uint8_t bank[] = {0xFF, 0x01};
-        err = i2c_master_transmit(device, bank, sizeof(bank), kI2cTimeoutMs);
-        if (err == ESP_OK) {
-            err = read_sensor_register(device, 0x0A, false, &high);
-        }
-        if (err == ESP_OK) {
-            err = read_sensor_register(device, 0x0B, false, &low);
-        }
-    } else {
-        err = read_sensor_register(device, 0x300A, true, &high);
-        if (err == ESP_OK) {
-            err = read_sensor_register(device, 0x300B, true, &low);
-        }
-    }
+    read_camera_pid(device, identity);
     i2c_master_bus_rm_device(device);
-    if (err == ESP_OK) {
-        identity->pid = static_cast<uint16_t>((high << 8) | low);
-        identity->pid_valid = true;
-    }
-    return err;
+    return ESP_OK;
 }
 
 const char *camera_model(const CameraIdentity &identity)
 {
-    if (identity.address == 0x30 &&
+    if (!identity.pid_valid) {
+        return "UNKNOWN";
+    }
+    if (identity.address == ESP_CAM_IO_PARL_OV2640_SCCB_ADDR &&
         (identity.pid >> 8) == ESP_CAM_IO_PARL_OV2640_PID) {
         return "OV2640";
     }
-    if (identity.address == 0x3C && identity.pid == ESP_CAM_IO_PARL_OV3660_PID) {
+    if (identity.address == ESP_CAM_IO_PARL_OV3660_SCCB_ADDR &&
+        identity.pid == ESP_CAM_IO_PARL_OV3660_PID) {
         return "OV3660";
     }
+    if (identity.address == ESP_CAM_IO_PARL_OV5640_SCCB_ADDR &&
+        identity.pid == ESP_CAM_IO_PARL_OV5640_PID) {
+        return "OV5640";
+    }
+    if (identity.address == ESP_CAM_IO_PARL_NT99141_SCCB_ADDR &&
+        identity.pid == ESP_CAM_IO_PARL_NT99141_PID) {
+        return "NT99141";
+    }
     return "UNKNOWN";
+}
+
+void format_camera_identity(
+    const CameraIdentity &identity,
+    char *buffer,
+    size_t buffer_size)
+{
+    if (identity.address == 0) {
+        std::snprintf(buffer, buffer_size, "No camera sensor acknowledged");
+    } else if (identity.pid_valid) {
+        std::snprintf(
+            buffer, buffer_size, "%s ADDR 0x%02X PID 0x%04X",
+            camera_model(identity), identity.address, identity.pid);
+    } else {
+        std::snprintf(
+            buffer, buffer_size, "UNKNOWN ADDR 0x%02X PID unreadable",
+            identity.address);
+    }
 }
 
 bool profile_matches(
@@ -235,10 +315,10 @@ esp_err_t init_camera_driver()
     sensor.sda_io = GPIO_NUM_NC;
     sensor.scl_io = GPIO_NUM_NC;
     sensor.i2c_port = BOARD_CAMERA_I2C_PORT;
-    sensor.ledc_timer = LEDC_TIMER_0;
-    sensor.ledc_channel = LEDC_CHANNEL_0;
+    sensor.ledc_timer = kXclkTimer;
+    sensor.ledc_channel = kXclkChannel;
     sensor.pixel_format = ESP_CAM_IO_PARL_PIXFORMAT_JPEG;
-    sensor.frame_size = ESP_CAM_IO_PARL_FRAMESIZE_320X320;
+    sensor.frame_size = ESP_CAM_IO_PARL_FRAMESIZE_240X240;
     sensor.jpeg_quality = BOARD_CAMERA_JPEG_QUALITY;
     ESP_RETURN_ON_ERROR(
         esp_cam_new_sensor_io_parl(&sensor, &s_sensor), kTag, "create camera sensor");
@@ -262,14 +342,6 @@ esp_err_t init_camera_driver()
     ESP_RETURN_ON_ERROR(esp_cam_new_io_parl(&io, &s_camera_io), kTag, "create PARLIO");
     ESP_RETURN_ON_ERROR(esp_cam_io_parl_enable(s_camera_io, true), kTag, "enable PARLIO");
     ESP_RETURN_ON_ERROR(esp_cam_sensor_io_parl_connect(s_camera_io), kTag, "connect sensor");
-    if (s_sensor->id.PID == ESP_CAM_IO_PARL_OV2640_PID) {
-        const int raw_err = s_sensor->set_res_raw(
-            s_sensor, 1, 0, 0, 0, 100, 0, 600, 600,
-            BOARD_LCD_H_RES, BOARD_LCD_V_RES, true, false);
-        if (raw_err != 0) {
-            return ESP_ERR_INVALID_STATE;
-        }
-    }
     if (!s_camera_io->use_soft_delimiter) {
         parlio_receive_config_t receive = {};
         receive.delimiter = s_camera_io->rx_delimiter;
@@ -285,17 +357,55 @@ esp_err_t init_camera_driver()
 
 void rotate_clockwise(uint16_t *pixels)
 {
-    for (int y = 0; y < BOARD_LCD_V_RES; ++y) {
-        for (int x = y + 1; x < BOARD_LCD_H_RES; ++x) {
+    for (int y = 0; y < kFrameHeight; ++y) {
+        for (int x = y + 1; x < kFrameWidth; ++x) {
             std::swap(
-                pixels[y * BOARD_LCD_H_RES + x],
-                pixels[x * BOARD_LCD_H_RES + y]);
+                pixels[y * kFrameWidth + x],
+                pixels[x * kFrameWidth + y]);
         }
     }
-    for (int y = 0; y < BOARD_LCD_V_RES; ++y) {
+    for (int y = 0; y < kFrameHeight; ++y) {
         std::reverse(
-            pixels + y * BOARD_LCD_H_RES,
-            pixels + (y + 1) * BOARD_LCD_H_RES);
+            pixels + y * kFrameWidth,
+            pixels + (y + 1) * kFrameWidth);
+    }
+}
+
+void stop_xclk()
+{
+    if (s_xclk_channel_configured) {
+        ledc_stop(kXclkSpeedMode, kXclkChannel, 0);
+        ledc_channel_config_t channel = {};
+        channel.speed_mode = kXclkSpeedMode;
+        channel.channel = kXclkChannel;
+        channel.deconfigure = true;
+        const esp_err_t err = ledc_channel_config(&channel);
+        if (err != ESP_OK) {
+            ESP_LOGE(kTag, "deconfigure XCLK channel: %s", esp_err_to_name(err));
+        }
+        s_xclk_channel_configured = false;
+    }
+    if (s_xclk_timer_configured) {
+        esp_err_t err = ledc_timer_pause(kXclkSpeedMode, kXclkTimer);
+        if (err == ESP_OK) {
+            ledc_timer_config_t timer = {};
+            timer.speed_mode = kXclkSpeedMode;
+            timer.timer_num = kXclkTimer;
+            timer.deconfigure = true;
+            err = ledc_timer_config(&timer);
+        }
+        if (err != ESP_OK) {
+            ESP_LOGE(kTag, "deconfigure XCLK timer: %s", esp_err_to_name(err));
+        }
+        s_xclk_timer_configured = false;
+    }
+    gpio_config_t camera_control = {};
+    camera_control.pin_bit_mask =
+        (1ULL << BOARD_CAMERA_XCLK) | (1ULL << BOARD_CAMERA_RESET);
+    camera_control.mode = GPIO_MODE_OUTPUT;
+    if (gpio_config(&camera_control) == ESP_OK) {
+        gpio_set_level(BOARD_CAMERA_XCLK, 0);
+        gpio_set_level(BOARD_CAMERA_RESET, 0);
     }
 }
 
@@ -318,11 +428,7 @@ void stop_camera_hardware()
         i2c_del_master_bus(s_camera_bus);
         s_camera_bus = nullptr;
     }
-    if (s_xclk_active) {
-        ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
-        gpio_set_level(BOARD_CAMERA_RESET, 0);
-        s_xclk_active = false;
-    }
+    stop_xclk();
     if (s_pmic != nullptr) {
         uint8_t enabled = 0;
         if (read_pmic(kPmicEnable, &enabled) == ESP_OK) {
@@ -390,6 +496,8 @@ esp_err_t camera_test_run(
     CameraIdentity identity = {};
     err = identify_camera(&identity);
     const char *detected = camera_model(identity);
+    char identity_detail[96] = {};
+    format_camera_identity(identity, identity_detail, sizeof(identity_detail));
     if (environment.run_result != nullptr) {
         std::snprintf(
             environment.run_result->camera_detected,
@@ -397,44 +505,92 @@ esp_err_t camera_test_run(
         environment.run_result->camera_address = identity.address;
         environment.run_result->camera_pid = identity.pid;
     }
-    if (err != ESP_OK || !identity.pid_valid) {
-        fail_record(record, "I2C_NO_ACK", "Camera sensor identification failed");
+    if (err != ESP_OK) {
+        board_ui_show_status(
+            "CAMERA NOT FOUND", identity_detail, "Power profile unchanged");
+        fail_record(record, "I2C_NO_ACK", identity_detail);
+        std::snprintf(
+            record->measurements, sizeof(record->measurements),
+            "{\"configured\":\"%s\",\"detected\":\"UNKNOWN\","
+            "\"address\":0,\"pid_readable\":false}",
+            factory_camera_profile_name(environment.camera_profile));
         stop_camera_hardware();
-        return err == ESP_OK ? ESP_ERR_NOT_FOUND : err;
+        return err;
+    }
+    if (!identity.pid_valid) {
+        board_ui_show_status(
+            "CAMERA ID ERROR", identity_detail, "Power profile unchanged");
+        fail_record(record, "ID_UNREADABLE", identity_detail);
+        std::snprintf(
+            record->measurements, sizeof(record->measurements),
+            "{\"configured\":\"%s\",\"detected\":\"UNKNOWN\","
+            "\"address\":%u,\"pid_readable\":false}",
+            factory_camera_profile_name(environment.camera_profile),
+            identity.address);
+        stop_camera_hardware();
+        return identity.pid_error == ESP_OK ? ESP_ERR_INVALID_RESPONSE :
+                                              identity.pid_error;
     }
     if (!profile_matches(environment.camera_profile, identity)) {
-        char detail[96] = {};
-        std::snprintf(detail, sizeof(detail), "%s at 0x%02X PID 0x%04X",
-                      detected, identity.address, identity.pid);
-        board_ui_show_status("CAMERA MISMATCH", detail, "Power profile was not changed automatically");
-        fail_record(record, "PROFILE_MISMATCH", detail);
-        std::snprintf(record->measurements, sizeof(record->measurements),
-                      "{\"configured\":\"%s\",\"detected\":\"%s\","
-                      "\"address\":%u,\"pid\":%u}",
-                      factory_camera_profile_name(environment.camera_profile), detected,
-                      identity.address, identity.pid);
+        const bool supported = std::strcmp(detected, "OV2640") == 0 ||
+                               std::strcmp(detected, "OV3660") == 0;
+        board_ui_show_status(
+            supported ? "CAMERA MISMATCH" : "CAMERA UNSUPPORTED",
+            identity_detail, "Power profile unchanged");
+        fail_record(
+            record, supported ? "PROFILE_MISMATCH" : "UNSUPPORTED_SENSOR",
+            identity_detail);
+        std::snprintf(
+            record->measurements, sizeof(record->measurements),
+            "{\"configured\":\"%s\",\"detected\":\"%s\","
+            "\"address\":%u,\"pid\":%u,\"pid_readable\":true}",
+            factory_camera_profile_name(environment.camera_profile), detected,
+            identity.address, identity.pid);
         stop_camera_hardware();
         return ESP_ERR_INVALID_STATE;
     }
 
+    const uint32_t frame_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    ESP_LOGI(
+        kTag,
+        "Allocating %u-byte %ux%u BGR565 frame; free=%u largest=%u",
+        static_cast<unsigned>(kFrameBytes), kFrameWidth, kFrameHeight,
+        static_cast<unsigned>(heap_caps_get_free_size(frame_caps)),
+        static_cast<unsigned>(heap_caps_get_largest_free_block(frame_caps)));
+    s_frame = static_cast<uint16_t *>(
+        heap_caps_aligned_calloc(
+            kJpegBufferAlignment, 1, kFrameBytes, frame_caps));
+    if (s_frame == nullptr) {
+        char detail[128] = {};
+        std::snprintf(
+            detail, sizeof(detail), "%s; no %u-byte frame buffer",
+            identity_detail, static_cast<unsigned>(kFrameBytes));
+        board_ui_show_status("CAMERA MEMORY", detail, "BGR565 240x240");
+        fail_record(record, "NO_MEMORY", detail);
+        stop_camera_hardware();
+        return ESP_ERR_NO_MEM;
+    }
     jpeg_decode_engine_cfg_t engine = {};
     engine.timeout_ms = 80;
     err = jpeg_new_decoder_engine(&engine, &s_decoder);
     if (err != ESP_OK) {
-        fail_record(record, "JPEG_INIT_FAILED", "Hardware JPEG decoder unavailable");
+        char detail[128] = {};
+        std::snprintf(
+            detail, sizeof(detail), "%s; JPEG decoder unavailable",
+            identity_detail);
+        fail_record(record, "JPEG_INIT_FAILED", detail);
         stop_camera_hardware();
         return err;
     }
-    s_frame = static_cast<uint16_t *>(
-        heap_caps_malloc(kFrameBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-    if (s_frame == nullptr) {
-        fail_record(record, "NO_MEMORY", "Unable to allocate camera frame");
-        stop_camera_hardware();
-        return ESP_ERR_NO_MEM;
-    }
     err = init_camera_driver();
     if (err != ESP_OK) {
-        fail_record(record, "CAMERA_INIT_FAILED", "Sensor/PARLIO initialization failed");
+        char detail[128] = {};
+        std::snprintf(
+            detail, sizeof(detail), "%s; driver init failed: %s",
+            identity_detail, esp_err_to_name(err));
+        board_ui_show_status(
+            "CAMERA INIT FAILED", detail, "Power profile unchanged");
+        fail_record(record, "CAMERA_INIT_FAILED", detail);
         stop_camera_hardware();
         return err;
     }
@@ -456,7 +612,7 @@ esp_err_t camera_test_run(
         if (err == ESP_OK && frame.buffer != nullptr && frame.length > 0) {
             err = jpeg_decoder_get_info(frame.buffer, frame.length, &info);
             if (err == ESP_OK &&
-                (info.width != BOARD_LCD_H_RES || info.height != BOARD_LCD_V_RES)) {
+                (info.width != kFrameWidth || info.height != kFrameHeight)) {
                 err = ESP_ERR_INVALID_SIZE;
             }
             if (err == ESP_OK) {
@@ -476,21 +632,37 @@ esp_err_t camera_test_run(
         failures = 0;
         ++frames;
         rotate_clockwise(s_frame);
-        board_ui_show_camera_frame(s_frame, FactoryTestId::kCamera, false);
+        board_ui_show_camera_frame(
+            s_frame, kFrameWidth, kFrameHeight,
+            FactoryTestId::kCamera, false);
         vTaskDelay(1);
     }
     const uint32_t duration_ms = static_cast<uint32_t>(
         (esp_timer_get_time() - start_us) / 1000);
     stop_camera_hardware();
     if (frames < FACTORY_CAMERA_FRAME_TARGET) {
-        fail_record(record, "FRAME_TIMEOUT", "Fewer than 30 valid decoded frames");
-        std::snprintf(record->measurements, sizeof(record->measurements),
-                      "{\"frames\":%lu,\"decode_failures\":%lu}",
-                      static_cast<unsigned long>(frames),
-                      static_cast<unsigned long>(failures));
+        char detail[128] = {};
+        std::snprintf(
+            detail, sizeof(detail), "%s; %lu/%u valid frames",
+            identity_detail, static_cast<unsigned long>(frames),
+            FACTORY_CAMERA_FRAME_TARGET);
+        board_ui_show_status("CAMERA FRAME FAILED", detail, "BGR565 240x240");
+        fail_record(record, "FRAME_TIMEOUT", detail);
+        std::snprintf(
+            record->measurements, sizeof(record->measurements),
+            "{\"configured\":\"%s\",\"detected\":\"%s\","
+            "\"address\":%u,\"pid\":%u,\"width\":%u,\"height\":%u,"
+            "\"format\":\"BGR565\",\"frames\":%lu,"
+            "\"decode_failures\":%lu}",
+            factory_camera_profile_name(environment.camera_profile), detected,
+            identity.address, identity.pid, kFrameWidth, kFrameHeight,
+            static_cast<unsigned long>(frames),
+            static_cast<unsigned long>(failures));
         return ESP_ERR_TIMEOUT;
     }
-    board_ui_show_camera_frame(s_frame, FactoryTestId::kCamera, true);
+    board_ui_show_camera_frame(
+        s_frame, kFrameWidth, kFrameHeight,
+        FactoryTestId::kCamera, true);
     outcome->automatic_pass = true;
     outcome->manual_required = true;
     outcome->replay_supported = true;
@@ -499,9 +671,12 @@ esp_err_t camera_test_run(
     std::snprintf(
         record->measurements, sizeof(record->measurements),
         "{\"configured\":\"%s\",\"detected\":\"%s\",\"address\":%u,"
-        "\"pid\":%u,\"frames\":%lu,\"fps\":%lu.%lu,\"avg_jpeg_bytes\":%llu}",
+        "\"pid\":%u,\"width\":%u,\"height\":%u,"
+        "\"format\":\"BGR565\",\"frames\":%lu,\"fps\":%lu.%lu,"
+        "\"avg_jpeg_bytes\":%llu}",
         factory_camera_profile_name(environment.camera_profile), detected,
-        identity.address, identity.pid, static_cast<unsigned long>(frames),
+        identity.address, identity.pid, kFrameWidth, kFrameHeight,
+        static_cast<unsigned long>(frames),
         static_cast<unsigned long>(fps_x10 / 10),
         static_cast<unsigned long>(fps_x10 % 10),
         static_cast<unsigned long long>(jpeg_bytes / frames));

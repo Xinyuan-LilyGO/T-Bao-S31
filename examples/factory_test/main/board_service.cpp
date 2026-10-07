@@ -847,29 +847,35 @@ void board_ui_show_manual(
 
 void board_ui_show_camera_frame(
     const uint16_t *pixels,
+    uint16_t width,
+    uint16_t height,
     FactoryTestId id,
     bool show_manual_buttons)
 {
-    if (pixels == nullptr || !ui_lock()) {
+    if (pixels == nullptr || width == 0 || height == 0 ||
+        width > BOARD_LCD_H_RES || height > BOARD_LCD_V_RES || !ui_lock()) {
         return;
     }
     s_manual_id = show_manual_buttons ? id : FactoryTestId::kCount;
     if (s_camera_obj == nullptr || s_camera_image.data !=
-            reinterpret_cast<const uint8_t *>(pixels)) {
+            reinterpret_cast<const uint8_t *>(pixels) ||
+        s_camera_image.header.w != width || s_camera_image.header.h != height) {
         lv_obj_t *screen = reset_screen(0x000000);
         s_camera_image = {};
         s_camera_image.header.magic = LV_IMAGE_HEADER_MAGIC;
         s_camera_image.header.cf = LV_COLOR_FORMAT_RGB565;
-        s_camera_image.header.w = BOARD_LCD_H_RES;
-        s_camera_image.header.h = BOARD_LCD_V_RES;
-        s_camera_image.header.stride = BOARD_LCD_H_RES * sizeof(uint16_t);
-        s_camera_image.data_size =
-            BOARD_LCD_H_RES * BOARD_LCD_V_RES * sizeof(uint16_t);
+        s_camera_image.header.w = width;
+        s_camera_image.header.h = height;
+        s_camera_image.header.stride = width * sizeof(uint16_t);
+        s_camera_image.data_size = width * height * sizeof(uint16_t);
         s_camera_image.data = reinterpret_cast<const uint8_t *>(pixels);
         s_camera_obj = lv_image_create(screen);
         lv_image_set_src(s_camera_obj, &s_camera_image);
-        lv_obj_set_pos(s_camera_obj, 0, 0);
     }
+    lv_obj_set_pos(
+        s_camera_obj,
+        (BOARD_LCD_H_RES - width) / 2,
+        show_manual_buttons ? 8 : (BOARD_LCD_V_RES - height) / 2);
     lv_obj_invalidate(s_camera_obj);
     if (show_manual_buttons && !s_camera_buttons_created) {
         lv_obj_t *screen = lv_screen_active();

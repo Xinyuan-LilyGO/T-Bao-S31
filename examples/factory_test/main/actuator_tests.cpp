@@ -42,6 +42,35 @@ esp_err_t configure_channel(
     return ledc_channel_config(&config);
 }
 
+void log_cleanup_error(const char *operation, esp_err_t err)
+{
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "%s: %s", operation, esp_err_to_name(err));
+    }
+}
+
+void deconfigure_channel(ledc_channel_t channel)
+{
+    ledc_channel_config_t config = {};
+    config.speed_mode = kSpeedMode;
+    config.channel = channel;
+    config.deconfigure = true;
+    log_cleanup_error("deconfigure LEDC channel", ledc_channel_config(&config));
+}
+
+void deconfigure_timer(ledc_timer_t timer)
+{
+    esp_err_t err = ledc_timer_pause(kSpeedMode, timer);
+    if (err == ESP_OK) {
+        ledc_timer_config_t config = {};
+        config.speed_mode = kSpeedMode;
+        config.timer_num = timer;
+        config.deconfigure = true;
+        err = ledc_timer_config(&config);
+    }
+    log_cleanup_error("deconfigure LEDC timer", err);
+}
+
 esp_err_t configure_motor_gpio_low(bool hold)
 {
     for (gpio_num_t pin : kMotorPins) {
@@ -81,13 +110,13 @@ esp_err_t configure_motor(gpio_num_t input1, gpio_num_t input2)
     timer.freq_hz = 20000;
     timer.clk_cfg = LEDC_USE_PLL_DIV_CLK;
     ESP_RETURN_ON_ERROR(ledc_timer_config(&timer), kTag, "configure motor timer");
+    s_motor_configured = true;
     ESP_RETURN_ON_ERROR(
         configure_channel(LEDC_CHANNEL_0, LEDC_TIMER_0, input1),
         kTag, "configure motor input 1");
     ESP_RETURN_ON_ERROR(
         configure_channel(LEDC_CHANNEL_1, LEDC_TIMER_0, input2),
         kTag, "configure motor input 2");
-    s_motor_configured = true;
     return ESP_OK;
 }
 
@@ -184,6 +213,9 @@ void motor_test_cleanup()
         set_channel(LEDC_CHANNEL_1, 0);
         ledc_stop(kSpeedMode, LEDC_CHANNEL_0, 0);
         ledc_stop(kSpeedMode, LEDC_CHANNEL_1, 0);
+        deconfigure_channel(LEDC_CHANNEL_0);
+        deconfigure_channel(LEDC_CHANNEL_1);
+        deconfigure_timer(LEDC_TIMER_0);
     }
     board_service_set_output(BOARD_XL_P11_DRV_EN, false);
     const esp_err_t gpio_err = configure_motor_gpio_low(true);
@@ -219,10 +251,10 @@ esp_err_t servo_test_run(
     timer.freq_hz = 50;
     timer.clk_cfg = LEDC_USE_PLL_DIV_CLK;
     ESP_RETURN_ON_ERROR(ledc_timer_config(&timer), kTag, "configure servo timer");
+    s_servo_configured = true;
     ESP_RETURN_ON_ERROR(
         configure_channel(LEDC_CHANNEL_4, LEDC_TIMER_1, BOARD_SERVO_PWM),
         kTag, "configure servo channel");
-    s_servo_configured = true;
     ESP_RETURN_ON_ERROR(
         board_service_set_output(BOARD_XL_P05_5V_EN, true),
         kTag, "enable servo 5V");
@@ -253,8 +285,16 @@ void servo_test_cleanup()
     if (s_servo_configured) {
         set_channel(LEDC_CHANNEL_4, 0);
         ledc_stop(kSpeedMode, LEDC_CHANNEL_4, 0);
+        deconfigure_channel(LEDC_CHANNEL_4);
+        deconfigure_timer(LEDC_TIMER_1);
     }
-    gpio_set_level(BOARD_SERVO_PWM, 0);
+    gpio_config_t servo = {};
+    servo.pin_bit_mask = 1ULL << BOARD_SERVO_PWM;
+    servo.mode = GPIO_MODE_OUTPUT;
+    servo.pull_down_en = GPIO_PULLDOWN_ENABLE;
+    if (gpio_config(&servo) == ESP_OK) {
+        gpio_set_level(BOARD_SERVO_PWM, 0);
+    }
     board_service_set_output(BOARD_XL_P05_5V_EN, false);
     s_servo_configured = false;
 }

@@ -54,6 +54,8 @@ void board_ui_show_manual(
     bool allow_replay);
 void board_ui_show_camera_frame(
     const uint16_t *pixels,
+    uint16_t width,
+    uint16_t height,
     FactoryTestId id,
     bool show_manual_buttons);
 void board_ui_clear_camera_frame();
