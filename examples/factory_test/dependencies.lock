@@ -1,0 +1,131 @@
+dependencies:
+  espressif/esp_codec_dev:
+    component_hash: 4779f31a3ba3f9b38aee1afe6ccb9ba8f6108dc3a6e77d39d7d714e9a215371b
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.6.2
+  espressif/esp_io_expander:
+    component_hash: 7b7f91270172e46ca4597e3874f48d8412e280e8c295559f5922ec38656e3e5f
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4.2'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.2.1
+  espressif/esp_lcd_st7796:
+    dependencies:
+    - name: idf
+      version: '>=4.4'
+    source:
+      path: ../display_touch_test/components/esp_lcd_st7796
+      type: local
+    version: 1.4.0
+  espressif/esp_lcd_touch:
+    component_hash: 3f85a7d95af876f1a6ecca8eb90a81614890d0f03a038390804e5a77e2caf862
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4.2'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.2.1
+  haqqscripter/esp_cam_io_parl:
+    component_hash: 77376d21bd3792fb9d04c81ce9055156b21ad4ac495cd93c2a9a40774071cd16
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32c6
+    - esp32h2
+    - esp32p4
+    - esp32c5
+    - esp32h4
+    - esp32h21
+    - esp32s31
+    version: 0.1.1
+  idf:
+    source:
+      type: idf
+    version: 6.1.0
+  lambage/esp_lcd_touch_ft6336u:
+    component_hash: b581c2abc643da397b98d269bb63a6fed8f7efa94df054b00d3e333c387ddb78
+    dependencies:
+    - name: espressif/esp_lcd_touch
+      registry_url: https://components.espressif.com
+      require: public
+      version: ^1.0.4
+    - name: idf
+      require: private
+      version: '>=4.4.2'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.8
+  lvgl/lvgl:
+    component_hash: 7d82410747bbfb319531449749e940f440f8414f041f9eaba13f0d1dd7f58cdd
+    dependencies:
+    - name: espressif/freetype
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: idf_version >=5.5 && $CONFIG{LV_USE_FREETYPE} == True
+      version: ^2.14.3
+    - name: espressif/libjpeg-turbo
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: idf_version >=5.5 && $CONFIG{LV_USE_LIBJPEG_TURBO} == True
+      version: ^3.1.1
+    - name: espressif/libpng
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: idf_version >=5.5 && $CONFIG{LV_USE_LIBPNG} == True
+      version: ^1.6.58
+    - name: espressif/lz4
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: idf_version >=5.5 && $CONFIG{LV_USE_LZ4} == True && $CONFIG{LV_USE_LZ4_INTERNAL} == False
+      version: ^1.10.0
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 9.6.0~1
+  sheldonix/esp_io_expander_xl9555:
+    component_hash: 4c564917698c9e1e42bbc63b50e958c5884e679f8a34a7a9cd03cd6e73f37d7c
+    dependencies:
+    - name: espressif/esp_io_expander
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^1.0
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.8.0
+direct_dependencies:
+- espressif/esp_codec_dev
+- espressif/esp_lcd_st7796
+- haqqscripter/esp_cam_io_parl
+- idf
+- lambage/esp_lcd_touch_ft6336u
+- lvgl/lvgl
+- sheldonix/esp_io_expander_xl9555
+manifest_hash: ef49177b4cffcc01a4871400473cac9275478709c7da456457a68eefd92b97f2
+target: esp32s31
+version: 3.0.0

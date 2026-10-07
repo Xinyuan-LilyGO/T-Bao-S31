@@ -1,0 +1,32 @@
+idf_component_register(
+    SRCS
+        main.cpp
+        factory_core.cpp
+        board_service.cpp
+        display_touch_test.cpp
+        audio_tests.cpp
+        camera_test.cpp
+        charger_test.cpp
+        actuator_tests.cpp
+        sdcard_test.cpp
+        wifi_test.cpp
+        factory_controller.cpp
+    INCLUDE_DIRS .
+    PRIV_REQUIRES
+        esp_app_format
+        esp_driver_gpio
+        esp_driver_i2c
+        esp_driver_i2s
+        esp_driver_jpeg
+        esp_driver_ledc
+        esp_event
+        esp_hw_support
+        esp_lcd
+        esp_netif
+        esp_timer
+        esp_wifi
+        fatfs
+        lwip
+        nvs_flash
+        sdmmc
+)

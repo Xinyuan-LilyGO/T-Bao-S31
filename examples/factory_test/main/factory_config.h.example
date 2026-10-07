@@ -1,0 +1,10 @@
+#pragma once
+
+// Copy this file to factory_config.h. The copied file is intentionally ignored.
+#define FACTORY_WIFI_SSID "TBAO_FACTORY"
+#define FACTORY_WIFI_PASSWORD "replace-at-station"
+
+// Optional station-specific threshold overrides.
+#define FACTORY_WIFI_MIN_RSSI_DBM (-70)
+#define FACTORY_MIC_MIN_DBFS (-45.0f)
+#define FACTORY_MANUAL_TIMEOUT_MS 30000
