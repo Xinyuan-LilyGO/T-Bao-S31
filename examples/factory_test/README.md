@@ -89,7 +89,7 @@ STATUS
 Test IDs are:
 
 ```text
-display_touch microphone speaker camera charger motor_a motor_b servo sd_card wifi
+display_touch touch_button io60_button boot_button microphone speaker camera charger motor_a motor_b servo sd_card wifi
 ```
 
 `PASS`, `FAIL`, and manual `RETRY` are accepted only for the test currently in
@@ -108,14 +108,24 @@ error code and measurements. It never includes the Wi-Fi password.
 
 ## Test Order
 
-1. Display patterns and 9-point touch grid, followed by display confirmation.
-2. ES7210 stereo microphone level and clipping check.
-3. ES8389 1 kHz speaker tone and operator confirmation/replay.
-4. Camera identity, 30 decoded frames and frozen-image confirmation/replay.
-5. SGM41529 protected 8.4 V / 500 mA short charge-path test.
-6. Motor A, motor B and servo movement confirmations.
-7. SDMMC 64 KiB write, verify, power-cycle remount and verify.
-8. Wi-Fi scan, RSSI, DHCP and 3-packet gateway ping.
+1. Display patterns and 9-point FT6336 touch grid, followed by display confirmation.
+2. GPIO11 capacitive touch pad (`TOUCH_CH5`) detection.
+3. GPIO60 active-low button detection.
+4. GPIO61 `ESP32_BOOT` active-low button detection.
+5. ES7210 stereo microphone level and clipping check.
+6. ES8389 1 kHz speaker tone and operator confirmation/replay.
+7. Camera identity, 30 decoded frames and frozen-image confirmation/replay.
+8. SGM41529 protected 8.4 V / 500 mA short charge-path test.
+9. Motor A, motor B and servo movement confirmations.
+10. SDMMC 64 KiB write, verify, power-cycle remount and verify.
+11. Wi-Fi scan, RSSI, DHCP and 3-packet gateway ping.
+
+The GPIO11, GPIO60 and BOOT tests require the operator to press the indicated
+physical pad/button after the screen prompts. GPIO60 and GPIO61 are sampled as
+active-low inputs with internal pull-ups and debounce. GPIO11 is measured with
+the ESP32-S31 capacitive-touch controller; the test records its baseline,
+threshold and largest observed change in the result JSON. Each input test
+releases its GPIO/touch resource during cleanup.
 
 An individual failure does not stop later tests. Manual confirmation and touch
 collection time out after 30 seconds. Safety cleanup runs after every attempt.

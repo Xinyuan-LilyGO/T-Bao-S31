@@ -77,10 +77,40 @@ esp_err_t run_motor_b(
         environment, FactoryTestId::kMotorB, record, outcome);
 }
 
+esp_err_t run_touch_button(
+    const FactoryTestEnvironment &environment,
+    FactoryTestRecord *record,
+    FactoryModuleOutcome *outcome)
+{
+    return touch_button_test_run(environment, record, outcome);
+}
+
+esp_err_t run_gpio60_button(
+    const FactoryTestEnvironment &environment,
+    FactoryTestRecord *record,
+    FactoryModuleOutcome *outcome)
+{
+    return gpio60_button_test_run(environment, record, outcome);
+}
+
+esp_err_t run_boot_button(
+    const FactoryTestEnvironment &environment,
+    FactoryTestRecord *record,
+    FactoryModuleOutcome *outcome)
+{
+    return boot_button_test_run(environment, record, outcome);
+}
+
 constexpr std::array<ModuleDescriptor, kFactoryTestCount> kModules = {{
     {FactoryTestId::kDisplayTouch, "DISPLAY / TOUCH",
      "Confirm colors, gray scale, checkerboard and no flicker",
      display_touch_test_run, display_touch_test_cleanup},
+    {FactoryTestId::kTouchButton, "GPIO11 TOUCH", "", run_touch_button,
+     touch_button_test_cleanup},
+    {FactoryTestId::kGpio60Button, "GPIO60 BUTTON", "", run_gpio60_button,
+     gpio60_button_test_cleanup},
+    {FactoryTestId::kBootButton, "BOOT BUTTON", "", run_boot_button,
+     boot_button_test_cleanup},
     {FactoryTestId::kMicrophone, "MICROPHONE", "", microphone_test_run,
      microphone_test_cleanup},
     {FactoryTestId::kSpeaker, "SPEAKER",

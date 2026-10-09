@@ -7,6 +7,9 @@
 
 enum class FactoryTestId : uint8_t {
     kDisplayTouch = 0,
+    kTouchButton,
+    kGpio60Button,
+    kBootButton,
     kMicrophone,
     kSpeaker,
     kCamera,

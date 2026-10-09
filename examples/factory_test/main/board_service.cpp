@@ -928,10 +928,12 @@ void board_ui_show_summary(const FactoryRunResult &result)
             line, sizeof(line), "%s  %s",
             factory_test_id_name(record.id),
             factory_test_status_name(record.status));
-        const int column = static_cast<int>(i / 5);
-        const int row = static_cast<int>(i % 5);
+        // Keep the complete result list inside the 320 px panel after adding
+        // the three board-button tests. Two columns leave seven compact rows.
+        const int column = static_cast<int>(i % 2);
+        const int row = static_cast<int>(i / 2);
         add_label(
-            screen, line, 10 + column * 154, 50 + row * 33, 148,
+            screen, line, 8 + column * 156, 46 + row * 28, 148,
             record.status == FactoryTestStatus::kPass ? 0x37D67A : 0xFF5D5D,
             LV_FONT_DEFAULT, LV_TEXT_ALIGN_LEFT);
     }

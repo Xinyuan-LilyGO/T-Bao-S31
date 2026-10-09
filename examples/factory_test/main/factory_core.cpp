@@ -11,9 +11,11 @@
 namespace {
 
 constexpr const char *kTestNames[] = {
-    "display_touch", "microphone", "speaker", "camera", "charger",
+    "display_touch", "touch_button", "io60_button", "boot_button",
+    "microphone", "speaker", "camera", "charger",
     "motor_a", "motor_b", "servo", "sd_card", "wifi",
 };
+static_assert(sizeof(kTestNames) / sizeof(kTestNames[0]) == kFactoryTestCount);
 
 bool equals_ignore_case(const char *left, const char *right)
 {

@@ -4,6 +4,7 @@ idf_component_register(
         factory_core.cpp
         board_service.cpp
         display_touch_test.cpp
+        input_tests.cpp
         audio_tests.cpp
         camera_test.cpp
         charger_test.cpp
@@ -19,6 +20,7 @@ idf_component_register(
         esp_driver_i2s
         esp_driver_jpeg
         esp_driver_ledc
+        esp_driver_touch_sens
         esp_event
         esp_hw_support
         esp_lcd

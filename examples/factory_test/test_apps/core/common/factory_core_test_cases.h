@@ -38,6 +38,18 @@ static void factory_core_case_parser()
         static_cast<int>(action.test_id));
 
     FT_ASSERT_TRUE(factory_parse_command(
+        "PASS io60_button", &action, error, sizeof(error)));
+    FT_ASSERT_EQ_INT(
+        static_cast<int>(FactoryTestId::kGpio60Button),
+        static_cast<int>(action.test_id));
+
+    FT_ASSERT_TRUE(factory_parse_command(
+        "RETRY boot_button", &action, error, sizeof(error)));
+    FT_ASSERT_EQ_INT(
+        static_cast<int>(FactoryTestId::kBootButton),
+        static_cast<int>(action.test_id));
+
+    FT_ASSERT_TRUE(factory_parse_command(
         "RETRY camera", &action, error, sizeof(error)));
     FT_ASSERT_EQ_INT(
         static_cast<int>(FactoryActionType::kRetry),
@@ -223,5 +235,7 @@ static void factory_core_case_json()
     FT_ASSERT_CONTAINS("\"overall\":\"PASS\"", json.c_str());
     FT_ASSERT_CONTAINS("\"measurements\":{\"value\":1}", json.c_str());
     FT_ASSERT_CONTAINS("\"id\":\"microphone\"", json.c_str());
+    FT_ASSERT_CONTAINS("\"id\":\"touch_button\"", json.c_str());
+    FT_ASSERT_CONTAINS("\"id\":\"boot_button\"", json.c_str());
     FT_ASSERT_CONTAINS("\"measurements\":{}", json.c_str());
 }

@@ -24,6 +24,15 @@ struct FactoryModuleOutcome {
 esp_err_t display_touch_test_run(
     const FactoryTestEnvironment &, FactoryTestRecord *, FactoryModuleOutcome *);
 void display_touch_test_cleanup();
+esp_err_t touch_button_test_run(
+    const FactoryTestEnvironment &, FactoryTestRecord *, FactoryModuleOutcome *);
+void touch_button_test_cleanup();
+esp_err_t gpio60_button_test_run(
+    const FactoryTestEnvironment &, FactoryTestRecord *, FactoryModuleOutcome *);
+void gpio60_button_test_cleanup();
+esp_err_t boot_button_test_run(
+    const FactoryTestEnvironment &, FactoryTestRecord *, FactoryModuleOutcome *);
+void boot_button_test_cleanup();
 esp_err_t microphone_test_run(
     const FactoryTestEnvironment &, FactoryTestRecord *, FactoryModuleOutcome *);
 void microphone_test_cleanup();
