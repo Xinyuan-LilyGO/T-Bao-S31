@@ -36,22 +36,27 @@ endpoint or the servo strains, reduce `kServoPulseMinUs` and
 
 ## Power and safety
 
-- The program enables the board's 5 V rail through XL9555 P05 before accepting
-  servo commands. GPIO5 is only the command signal.
-- XL9555 P11 starts low while all four DRV8833 inputs are initialized to zero,
-  then goes high and remains enabled. Motor stop and failsafe operations keep
-  AIN1, AIN2, BIN1, and BIN2 low instead of turning P11 off.
+- XL9555 P05 is kept low at startup and while the servo is disabled. The
+  program enables the board's 5 V rail before each servo command and waits for
+  the rail to settle; GPIO5 is only the command signal.
+- XL9555 P11 starts low while all four DRV8833 inputs are initialized to zero.
+  It is enabled only after a nonzero motor command has been written to the
+  PWM inputs. Motor stop, failsafe, and `STOP ALL` clear all four inputs and
+  drive P11 low so the bridge is disabled before a reset or download.
 - On startup the example releases any low GPIO hold left by `factory_test`
-  before assigning GPIO12-GPIO15 to LEDC PWM. This is required when changing
-  examples without a full power cycle.
+  before assigning GPIO12-GPIO15 to LEDC PWM. Idle and stop states then
+  re-latch those pins low; the latch is released only for a nonzero motor
+  command. This is required when changing examples without a full power cycle
+  and prevents old PWM from driving the motor during reset/download.
 - Startup reads P05 and P11 back from the XL9555 input register. An enable-line
   wiring or register-mapping fault now stops initialization with an explicit
   `actuator enable readback mismatch` log.
 - Use a motor supply sized for the connected motors and the DRV8833 board.
 - Connect the controller, servo supply, and motor driver grounds together.
 - Keep wheels or linkages unloaded during the first test.
-- All PWM outputs start disabled. A two-second browser heartbeat timeout, Wi-Fi
-  disconnect, or `STOP ALL` command stops both motors and disables servo PWM.
+- All PWM outputs and both actuator enables start disabled. A two-second browser
+  heartbeat timeout, Wi-Fi disconnect, or `STOP ALL` command stops both motors,
+  disables P11 and P05, and disables servo PWM.
 
 ## Local Wi-Fi credentials
 
@@ -87,7 +92,10 @@ local network.
 - ES9051: PWM enable and pulse width from 1100 us to 1900 us.
 - `ZERO A` / `ZERO B`: stop one motor.
 - `CENTER`: enable the servo at 1500 us.
-- `STOP ALL`: stop both motors and disable servo PWM.
+- `STOP ALL`: stop both motors, disable the DRV8833 bridge and disable servo
+  PWM. Use it before downloading a new firmware image.
+- Leaving or hiding the browser page sends the same stop request automatically;
+  keep the page visible only while testing motion.
 
 The page and REST endpoints are intended for trusted local bench testing. They
 do not implement authentication or encrypted transport.

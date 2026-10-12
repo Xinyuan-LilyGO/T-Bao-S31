@@ -45,6 +45,7 @@ constexpr ledc_channel_t kMotorAIn2Channel = LEDC_CHANNEL_1;
 constexpr ledc_channel_t kMotorBIn1Channel = LEDC_CHANNEL_2;
 constexpr ledc_channel_t kMotorBIn2Channel = LEDC_CHANNEL_3;
 constexpr ledc_channel_t kServoChannel = LEDC_CHANNEL_4;
+constexpr uint32_t kMotorDriverEnableMask = BOARD_XL9555_P11_DRV_EN;
 
 SemaphoreHandle_t s_mutex = nullptr;
 i2c_master_bus_handle_t s_i2c_bus = nullptr;
@@ -53,6 +54,78 @@ ActuatorState s_state = {};
 ActuatorStateCallback s_callback = nullptr;
 void *s_callback_context = nullptr;
 int64_t s_last_command_us = 0;
+
+esp_err_t set_motor_driver_enabled(bool enabled)
+{
+    if (s_xl9555 == nullptr) {
+        return ESP_OK;
+    }
+    ESP_RETURN_ON_ERROR(
+        esp_io_expander_set_level(
+            s_xl9555, kMotorDriverEnableMask, enabled ? 1 : 0),
+        kTag,
+        "set motor driver enable");
+
+    uint32_t level = 0;
+    ESP_RETURN_ON_ERROR(
+        esp_io_expander_get_level(
+            s_xl9555, kMotorDriverEnableMask, &level),
+        kTag,
+        "read motor driver enable");
+    ESP_RETURN_ON_FALSE(
+        (level & kMotorDriverEnableMask) ==
+            (enabled ? kMotorDriverEnableMask : 0),
+        ESP_ERR_INVALID_STATE,
+        kTag,
+        "motor driver enable readback mismatch: expected=%d, actual=0x%04" PRIX32,
+        enabled ? 1 : 0,
+        level);
+    return ESP_OK;
+}
+
+esp_err_t set_servo_power_enabled(bool enabled)
+{
+    if (s_xl9555 == nullptr) {
+        return ESP_OK;
+    }
+    ESP_RETURN_ON_ERROR(
+        esp_io_expander_set_level(
+            s_xl9555, BOARD_XL9555_P05_POWER_EN, enabled ? 1 : 0),
+        kTag,
+        "set servo power");
+
+    uint32_t level = 0;
+    ESP_RETURN_ON_ERROR(
+        esp_io_expander_get_level(
+            s_xl9555, BOARD_XL9555_P05_POWER_EN, &level),
+        kTag,
+        "read servo power");
+    ESP_RETURN_ON_FALSE(
+        (level & BOARD_XL9555_P05_POWER_EN) ==
+            (enabled ? BOARD_XL9555_P05_POWER_EN : 0),
+        ESP_ERR_INVALID_STATE,
+        kTag,
+        "servo power readback mismatch: expected=%d, actual=0x%04" PRIX32,
+        enabled ? 1 : 0,
+        level);
+    return ESP_OK;
+}
+
+esp_err_t set_motor_gpio_hold(bool held)
+{
+    for (gpio_num_t pin : kMotorPins) {
+        if (held) {
+            ESP_RETURN_ON_ERROR(
+                gpio_set_level(pin, 0), kTag, "clear motor GPIO before hold");
+            ESP_RETURN_ON_ERROR(
+                gpio_hold_en(pin), kTag, "hold motor GPIO low");
+        } else {
+            ESP_RETURN_ON_ERROR(
+                gpio_hold_dis(pin), kTag, "release motor GPIO hold");
+        }
+    }
+    return ESP_OK;
+}
 
 esp_err_t set_duty(ledc_channel_t channel, uint32_t duty)
 {
@@ -93,6 +166,13 @@ uint32_t servo_duty_from_pulse(int pulse_us)
 
 esp_err_t apply_outputs_locked(const ActuatorState &next)
 {
+    const bool motor_active =
+        next.motor_a_percent != 0 || next.motor_b_percent != 0;
+    // factory_test latches idle motor pins low across reset/download. Release
+    // that latch only for an actual motor command, then re-latch it after the
+    // bridge inputs have been cleared for the idle state.
+    ESP_RETURN_ON_ERROR(
+        set_motor_gpio_hold(false), kTag, "release motor GPIO hold");
     ESP_RETURN_ON_ERROR(
         set_motor(
             kMotorAIn1Channel,
@@ -107,9 +187,31 @@ esp_err_t apply_outputs_locked(const ActuatorState &next)
             next.motor_b_percent),
         kTag,
         "set motor B");
-    return set_duty(
-        kServoChannel,
-        next.servo_enabled ? servo_duty_from_pulse(next.servo_pulse_us) : 0);
+    // Latch the input pins before disabling the bridge so an expander error
+    // cannot leave the motor inputs floating during reset/download.
+    if (!motor_active) {
+        ESP_RETURN_ON_ERROR(
+            set_motor_gpio_hold(true), kTag, "hold motor GPIOs low");
+    }
+    // Keep DRV8833 disabled whenever both motor commands are zero. This also
+    // makes STOP ALL and heartbeat failsafe safe before a reset/download.
+    ESP_RETURN_ON_ERROR(
+        set_motor_driver_enabled(motor_active),
+        kTag,
+        "set motor driver enable");
+    if (next.servo_enabled) {
+        const bool was_disabled = !s_state.servo_enabled;
+        ESP_RETURN_ON_ERROR(
+            set_servo_power_enabled(true), kTag, "enable servo power");
+        if (was_disabled && s_xl9555 != nullptr) {
+            vTaskDelay(pdMS_TO_TICKS(kActuatorPowerSettleMs));
+        }
+        return set_duty(
+            kServoChannel, servo_duty_from_pulse(next.servo_pulse_us));
+    }
+    ESP_RETURN_ON_ERROR(
+        set_duty(kServoChannel, 0), kTag, "disable servo PWM");
+    return set_servo_power_enabled(false);
 }
 
 void publish_state(const ActuatorState &state)
@@ -148,9 +250,8 @@ esp_err_t configure_channel(
     return ledc_channel_config(&config);
 }
 
-// factory_test holds the motor pins low while the board is idle. That hold
-// can survive a reset/flash cycle, so release it before handing the pins to
-// LEDC or the PWM output remains stuck low.
+// factory_test may leave these pads held low across a reset/flash cycle.
+// Release the inherited hold before assigning the pins to LEDC PWM.
 esp_err_t prepare_motor_gpio()
 {
     gpio_config_t config = {};
@@ -161,12 +262,13 @@ esp_err_t prepare_motor_gpio()
     config.pull_down_en = GPIO_PULLDOWN_ENABLE;
     ESP_RETURN_ON_ERROR(
         gpio_config(&config), kTag, "configure motor GPIOs");
-
     for (gpio_num_t pin : kMotorPins) {
         ESP_RETURN_ON_ERROR(
             gpio_hold_dis(pin), kTag, "release motor GPIO hold");
         ESP_RETURN_ON_ERROR(
             gpio_set_level(pin, 0), kTag, "clear motor GPIO");
+        ESP_RETURN_ON_ERROR(
+            gpio_hold_en(pin), kTag, "hold initial motor GPIO low");
     }
     return ESP_OK;
 }
@@ -202,9 +304,16 @@ esp_err_t initialize_expander_controls()
         "configure actuator enables");
     ESP_RETURN_ON_ERROR(
         esp_io_expander_set_level(
-            s_xl9555, kEnableMask, 1),
+            s_xl9555, BOARD_XL9555_P11_DRV_EN, 0),
         kTag,
-        "enable servo power and motor driver");
+        "disable motor driver during startup");
+    ESP_RETURN_ON_ERROR(
+        esp_io_expander_set_level(
+            s_xl9555,
+            BOARD_XL9555_P05_POWER_EN | BOARD_XL9555_P11_DRV_EN,
+            0),
+        kTag,
+        "disable actuator power during startup");
 
     vTaskDelay(pdMS_TO_TICKS(kActuatorPowerSettleMs));
 
@@ -215,17 +324,16 @@ esp_err_t initialize_expander_controls()
         kTag,
         "read actuator enables");
     ESP_RETURN_ON_FALSE(
-        (enable_levels & kEnableMask) == kEnableMask,
+        (enable_levels & kEnableMask) == 0,
         ESP_ERR_INVALID_STATE,
         kTag,
-        "actuator enable readback mismatch: expected=0x%04" PRIX32
-        ", actual=0x%04" PRIX32,
-        kEnableMask,
+        "actuator enable readback mismatch: expected P05/P11 low, "
+        "actual=0x%04" PRIX32,
         enable_levels);
 
     ESP_LOGI(
         kTag,
-        "Servo power and motor driver enabled through XL9555 P05/P11 "
+        "Servo power P05 and motor driver P11 start disabled "
         "(addr=0x%02X, mask=0x%04" PRIX32 ")",
         BOARD_XL9555_I2C_ADDR,
         kEnableMask);

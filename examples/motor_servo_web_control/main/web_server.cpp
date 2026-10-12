@@ -75,7 +75,7 @@ input[type=range]{width:100%;height:32px;accent-color:var(--blue)}
   <div class="scale"><span>1100 us</span><span>1500 us</span><span>1900 us</span></div>
   <div class="row"><span class="hint">50 Hz command pulse</span><button id="centerServo" type="button">CENTER</button></div>
 </section>
-<div class="footer"><span id="safetyState">2 s heartbeat failsafe</span><span>Local network test controller</span></div>
+<div class="footer"><span id="safetyState">2 s heartbeat failsafe</span><span>Press STOP ALL before reset/download</span></div>
 </main>
 <script>
 const el=id=>document.getElementById(id);
@@ -90,10 +90,12 @@ Object.values(controls).forEach(node=>node.addEventListener('input',queueSend));
 el('zeroA').onclick=()=>{controls.motorA.value=0;queueSend();};
 el('zeroB').onclick=()=>{controls.motorB.value=0;queueSend();};
 el('centerServo').onclick=()=>{controls.servoUs.value=1500;controls.servoEnabled.checked=true;queueSend();};
-el('stopAll').onclick=async()=>{try{const r=await fetch('/api/stop',{method:'POST',cache:'no-store'});applyState(await r.json());}catch(e){};};
+el('stopAll').onclick=async()=>{sendStopBeacon();try{const r=await fetch('/api/stop',{method:'POST',cache:'no-store'});applyState(await r.json());}catch(e){};};
 async function loadState(){try{const r=await fetch('/api/state',{cache:'no-store'});applyState(await r.json());el('linkState').textContent='Live';}catch(e){el('linkState').textContent='Offline';el('linkState').style.color='var(--red)';}}
 setInterval(()=>{if(document.visibilityState==='visible')sendControl();},700);
-window.addEventListener('pagehide',()=>navigator.sendBeacon('/api/stop',''));
+function sendStopBeacon(){controls.motorA.value=0;controls.motorB.value=0;controls.servoEnabled.checked=false;paint();navigator.sendBeacon('/api/stop','');}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')sendStopBeacon();});
+window.addEventListener('pagehide',sendStopBeacon);
 paint();loadState();
 </script>
 </body>
