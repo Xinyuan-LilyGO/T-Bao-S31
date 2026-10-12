@@ -65,5 +65,5 @@ jobs:
         run: |
           set -euo pipefail
           . "$IDF_PATH/export.sh"
-          idf.py set-target "$IDF_TARGET"
+          idf.py --preview set-target "$IDF_TARGET"
           idf.py build
