@@ -41,6 +41,9 @@ endpoint or the servo strains, reduce `kServoPulseMinUs` and
 - XL9555 P11 starts low while all four DRV8833 inputs are initialized to zero,
   then goes high and remains enabled. Motor stop and failsafe operations keep
   AIN1, AIN2, BIN1, and BIN2 low instead of turning P11 off.
+- On startup the example releases any low GPIO hold left by `factory_test`
+  before assigning GPIO12-GPIO15 to LEDC PWM. This is required when changing
+  examples without a full power cycle.
 - Startup reads P05 and P11 back from the XL9555 input register. An enable-line
   wiring or register-mapping fault now stops initialization with an explicit
   `actuator enable readback mismatch` log.

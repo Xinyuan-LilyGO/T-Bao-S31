@@ -5,6 +5,7 @@
 #include <cstdlib>
 
 #include "board_config.h"
+#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/ledc.h"
 #include "esp_check.h"
@@ -32,6 +33,12 @@ constexpr uint32_t kServoPeriodUs = 1000000U / kServoFrequencyHz;
 constexpr int kActuatorPowerSettleMs = 30;
 constexpr int kFailsafeTimeoutMs = 2000;
 constexpr int kFailsafeCheckMs = 250;
+constexpr gpio_num_t kMotorPins[] = {
+    BOARD_DRV_AIN1,
+    BOARD_DRV_AIN2,
+    BOARD_DRV_BIN1,
+    BOARD_DRV_BIN2,
+};
 
 constexpr ledc_channel_t kMotorAIn1Channel = LEDC_CHANNEL_0;
 constexpr ledc_channel_t kMotorAIn2Channel = LEDC_CHANNEL_1;
@@ -139,6 +146,29 @@ esp_err_t configure_channel(
     config.duty = 0;
     config.hpoint = 0;
     return ledc_channel_config(&config);
+}
+
+// factory_test holds the motor pins low while the board is idle. That hold
+// can survive a reset/flash cycle, so release it before handing the pins to
+// LEDC or the PWM output remains stuck low.
+esp_err_t prepare_motor_gpio()
+{
+    gpio_config_t config = {};
+    for (gpio_num_t pin : kMotorPins) {
+        config.pin_bit_mask |= 1ULL << pin;
+    }
+    config.mode = GPIO_MODE_OUTPUT;
+    config.pull_down_en = GPIO_PULLDOWN_ENABLE;
+    ESP_RETURN_ON_ERROR(
+        gpio_config(&config), kTag, "configure motor GPIOs");
+
+    for (gpio_num_t pin : kMotorPins) {
+        ESP_RETURN_ON_ERROR(
+            gpio_hold_dis(pin), kTag, "release motor GPIO hold");
+        ESP_RETURN_ON_ERROR(
+            gpio_set_level(pin, 0), kTag, "clear motor GPIO");
+    }
+    return ESP_OK;
 }
 
 esp_err_t initialize_expander_controls()
@@ -249,6 +279,8 @@ esp_err_t actuator_control_init(
         return ESP_ERR_NO_MEM;
     }
 
+    ESP_RETURN_ON_ERROR(
+        prepare_motor_gpio(), kTag, "prepare motor GPIOs");
     ESP_RETURN_ON_ERROR(
         configure_timer(kMotorTimer, kMotorResolution, kMotorFrequencyHz),
         kTag,
