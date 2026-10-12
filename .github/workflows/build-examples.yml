@@ -1,0 +1,69 @@
+name: Build ESP-IDF examples
+
+on:
+  push:
+    paths:
+      - "examples/**"
+      - ".github/workflows/build-examples.yml"
+  pull_request:
+    paths:
+      - "examples/**"
+      - ".github/workflows/build-examples.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    name: Discover examples
+    runs-on: ubuntu-latest
+    outputs:
+      projects: ${{ steps.list.outputs.projects }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Find ESP-IDF projects
+        id: list
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          projects="$(find examples -mindepth 2 -maxdepth 2 -type f -name CMakeLists.txt -printf '%h\n' | sort | jq -Rsc 'split("\n") | map(select(length > 0))')"
+
+          if [[ "$projects" == "[]" ]]; then
+            echo "No ESP-IDF projects were found under examples/." >&2
+            exit 1
+          fi
+
+          echo "Testing projects: $projects"
+          echo "projects=$projects" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.project }}
+    needs: discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: false
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        project: ${{ fromJSON(needs.discover.outputs.projects) }}
+    container:
+      image: espressif/idf:release-v6.1
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build example for ESP32-S31
+        working-directory: ${{ matrix.project }}
+        shell: bash
+        env:
+          IDF_TARGET: esp32s31
+        run: |
+          set -euo pipefail
+          . "$IDF_PATH/export.sh"
+          idf.py set-target "$IDF_TARGET"
+          idf.py build
