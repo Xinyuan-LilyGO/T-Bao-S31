@@ -65,5 +65,17 @@ jobs:
         run: |
           set -euo pipefail
           . "$IDF_PATH/export.sh"
+
+          # sdkconfig is generated state.  The checked-in copy can be from a
+          # different IDF/Board Manager run, and `set-target` may regenerate it
+          # before the build.  For Board Manager projects, always regenerate
+          # from the project and board defaults so the generated sdkconfig
+          # contains the selected board's peripheral/device symbols.
+          if [[ -f components/gen_bmgr_codes/board_manager.defaults ]]; then
+            rm -f sdkconfig sdkconfig.old
+            export SDKCONFIG_DEFAULTS="$PWD/sdkconfig.defaults;$PWD/components/gen_bmgr_codes/board_manager.defaults"
+            idf.py bmgr -b tbao_s31_board
+          fi
+
           idf.py --preview set-target "$IDF_TARGET"
           idf.py build
