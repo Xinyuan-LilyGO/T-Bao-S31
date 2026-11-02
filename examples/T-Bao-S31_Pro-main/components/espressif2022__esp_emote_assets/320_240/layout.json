@@ -1,0 +1,116 @@
+[
+  {
+    "type": "anim",
+    "name": "eye_anim",
+    "align": "GFX_ALIGN_LEFT_MID",
+    "x": 10,
+    "y": 30,
+    "anim": {
+      "mirror": "auto"
+    }
+  },
+  {
+    "type": "anim",
+    "name": "emerg_dlg",
+    "align": "GFX_ALIGN_LEFT_MID",
+    "x": 10,
+    "y": 30,
+    "anim": {
+      "mirror": "auto"
+    }
+  },
+  {
+    "type": "image",
+    "name": "status_icon",
+    "align": "GFX_ALIGN_TOP_MID",
+    "x": -145,
+    "y": 18
+  },
+  {
+    "type": "image",
+    "name": "charge_icon",
+    "align": "GFX_ALIGN_TOP_MID",
+    "x": -117,
+    "y": 28
+  },
+  {
+    "type": "label",
+    "name": "battery_label",
+    "align": "GFX_ALIGN_TOP_MID",
+    "x": -147,
+    "y": 31,
+    "width": 30,
+    "height": 20,
+    "label": {
+      "color": 16777215,
+      "text_align": "GFX_TEXT_ALIGN_CENTER",
+      "long_mode": {
+        "type": "GFX_LABEL_LONG_SCROLL",
+        "loop": true,
+        "speed": 10
+      }
+    }
+  },
+  {
+    "type": "label",
+    "name": "toast_label",
+    "align": "GFX_ALIGN_TOP_MID",
+    "x": 25,
+    "y": 20,
+    "width": 280,
+    "height": 40,
+    "label": {
+      "color": 16777215,
+      "text_align": "GFX_TEXT_ALIGN_CENTER",
+      "long_mode": {
+        "type": "GFX_LABEL_LONG_SCROLL",
+        "loop": true,
+        "speed": 10
+      }
+    }
+  },
+  {
+    "type": "label",
+    "name": "clock_label",
+    "align": "GFX_ALIGN_TOP_MID",
+    "x": 0,
+    "y": 20,
+    "width": 90,
+    "height": 50,
+    "label": {
+      "color": 16777215,
+      "text_align": "GFX_TEXT_ALIGN_CENTER",
+      "long_mode": {
+        "type": "GFX_LABEL_LONG_CLIP"
+      }
+    }
+  },
+  {
+    "type": "anim",
+    "name": "listen_anim",
+    "align": "GFX_ALIGN_TOP_MID",
+    "x": 0,
+    "y": 5,
+    "anim": {
+      "mirror": "false"
+    }
+  },
+  {
+    "type": "timer",
+    "name": "clock_timer",
+    "timer": {
+      "period": 1000,
+      "repeat_count": -1
+    }
+  },
+  {
+    "type": "qrcode",
+    "name": "qrcode",
+    "align": "GFX_ALIGN_CENTER",
+    "x": 0,
+    "y": 30,
+    "qrcode": {
+      "size": 150
+    }
+  }
+]

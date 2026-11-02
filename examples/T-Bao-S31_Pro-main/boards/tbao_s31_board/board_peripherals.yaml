@@ -1,0 +1,45 @@
+# T-Bao S31 peripheral wiring.
+peripherals:
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 0
+        scl: 1
+
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config: &i2s_audio_config
+      port: 0
+      sample_rate_hz: 16000
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_STEREO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: 6
+        bclk: 8
+        ws: 9
+        dout: 7
+        din: 10
+
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config: *i2s_audio_config
+
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 16
+      freq_hz: 2000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT

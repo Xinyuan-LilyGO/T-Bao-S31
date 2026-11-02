@@ -1,0 +1,65 @@
+diff --git a/managed_components/espressif__esp_lvgl_port/CMakeLists.txt b/managed_components/espressif__esp_lvgl_port/CMakeLists.txt
+--- a/managed_components/espressif__esp_lvgl_port/CMakeLists.txt
++++ b/managed_components/espressif__esp_lvgl_port/CMakeLists.txt
+@@ -14,9 +14,11 @@
+ set(ADD_SRCS "")
+ set(ADD_LIBS "")
+ set(PRIV_REQ "")
+-idf_build_get_property(target IDF_TARGET)
+-if(${target} STREQUAL "esp32p4")
++# PPA is available on every target that advertises SOC_PPA_SUPPORTED, not only
++# on ESP32-P4. Keep the component dependency aligned with the source-level
++# CONFIG_LVGL_PORT_ENABLE_PPA guard used by esp_lvgl_port_disp.c.
++if(CONFIG_LVGL_PORT_ENABLE_PPA AND CONFIG_SOC_PPA_SUPPORTED)
+     list(APPEND ADD_SRCS "src/common/ppa/lcd_ppa.c")
+     list(APPEND ADD_LIBS idf::esp_driver_ppa)
+     list(APPEND PRIV_REQ esp_driver_ppa)
+ endif()
+diff --git a/managed_components/espressif__esp_lvgl_port/src/common/ppa/lcd_ppa.c b/managed_components/espressif__esp_lvgl_port/src/common/ppa/lcd_ppa.c
+--- a/managed_components/espressif__esp_lvgl_port/src/common/ppa/lcd_ppa.c
++++ b/managed_components/espressif__esp_lvgl_port/src/common/ppa/lcd_ppa.c
+@@ -8,1 +8,2 @@
+ #include <string.h>
++#include "sdkconfig.h"
+@@ -16,5 +16,14 @@
+ #define PPA_LCD_ENABLE_CB   0
+ 
+ #if SOC_PPA_SUPPORTED
++#if defined(CONFIG_CACHE_L2_CACHE_LINE_SIZE)
++#define LVGL_PORT_PPA_CACHE_LINE_SIZE CONFIG_CACHE_L2_CACHE_LINE_SIZE
++#elif defined(CONFIG_CACHE_L1_DCACHE_LINE_SIZE)
++/* ESP32-S31 has no L2 cache configuration; its PPA buffers use L1 D-cache alignment. */
++#define LVGL_PORT_PPA_CACHE_LINE_SIZE CONFIG_CACHE_L1_DCACHE_LINE_SIZE
++#else
++/* Keep the component buildable for targets that expose neither cache Kconfig symbol. */
++#define LVGL_PORT_PPA_CACHE_LINE_SIZE 64
++#endif
+ 
+ #define ALIGN_UP(num, align)    (((num) + ((align) - 1)) & ~((align) - 1))
+@@ -56,5 +67,5 @@
+     }
+ 
+-    ppa_ctx->buffer_size = ALIGN_UP(cfg->buffer_size, CONFIG_CACHE_L2_CACHE_LINE_SIZE);
+-    ppa_ctx->buffer = heap_caps_aligned_calloc(CONFIG_CACHE_L2_CACHE_LINE_SIZE, ppa_ctx->buffer_size, sizeof(uint8_t),
++    ppa_ctx->buffer_size = ALIGN_UP(cfg->buffer_size, LVGL_PORT_PPA_CACHE_LINE_SIZE);
++    ppa_ctx->buffer = heap_caps_aligned_calloc(LVGL_PORT_PPA_CACHE_LINE_SIZE, ppa_ctx->buffer_size, sizeof(uint8_t),
+                       buffer_caps);
+diff --git a/managed_components/espressif__esp_lvgl_port/CMakeLists_v2.txt b/managed_components/espressif__esp_lvgl_port/CMakeLists_v2.txt
+--- a/managed_components/espressif__esp_lvgl_port/CMakeLists_v2.txt
++++ b/managed_components/espressif__esp_lvgl_port/CMakeLists_v2.txt
+@@ -73,11 +73,12 @@
+ # Private dep: esp_timer.
+ idf_component_include(esp_timer)
+ target_link_libraries(${COMPONENT_TARGET} PRIVATE idf::esp_timer)
+ 
+-# Target-specific: ESP32-P4 picks up the PPA driver.
+-idf_build_get_property(target IDF_TARGET)
+-if(${target} STREQUAL "esp32p4")
++# PPA is available on every target that advertises SOC_PPA_SUPPORTED, not only
++# on ESP32-P4. Keep the component dependency aligned with the source-level
++# CONFIG_LVGL_PORT_ENABLE_PPA guard used by esp_lvgl_port_disp.c.
++if(CONFIG_LVGL_PORT_ENABLE_PPA AND CONFIG_SOC_PPA_SUPPORTED)
+     idf_component_include(esp_driver_ppa)
+     target_sources(${COMPONENT_TARGET} PRIVATE "src/common/ppa/lcd_ppa.c")
+     target_link_libraries(${COMPONENT_TARGET} PRIVATE idf::esp_driver_ppa)
+ endif()

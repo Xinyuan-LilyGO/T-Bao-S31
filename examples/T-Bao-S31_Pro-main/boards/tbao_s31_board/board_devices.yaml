@@ -1,0 +1,168 @@
+devices:
+  - name: gpio_expander
+    chip: xl9555
+    type: gpio_expander
+    version: default
+    dependencies:
+      sheldonix/esp_io_expander_xl9555: "^0.8.0"
+    config:
+      max_pins: 16
+      output_io_mask: [1, 5, 7, 8, 9]
+      output_io_level_mask: [1, 1, 0, 0, 0]
+      input_io_mask: [0]
+    peripherals:
+      - name: i2c_master
+        # Board Manager stores I2C addresses in 8-bit wire encoding. This
+        # value is shifted right by the manager and reaches the XL9555 as the
+        # requested 7-bit runtime address 0x22.
+        i2c_addr: [0x44]
+
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    config:
+      default_percent: 80
+    peripherals:
+      - name: ledc_backlight
+
+  - name: audio_dac
+    chip: es8389
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+      dac_enabled: true
+      dac_max_channel: 2
+      dac_channel_mask: "11"
+      mclk_enabled: true
+    peripherals:
+      - name: i2s_audio_out
+      - name: i2c_master
+        address: 0x20
+        frequency: 400000
+
+  - name: audio_adc
+    chip: es7210
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 4
+      adc_channel_mask: "0011"
+      adc_channel_labels: ['NA', 'NA', 'FR', 'FL']
+      adc_init_gain: 0
+      mclk_enabled: true
+    peripherals:
+      - name: i2s_audio_in
+      - name: i2c_master
+        address: 0x80
+        frequency: 400000
+
+  - name: display_lcd
+    chip: st7796
+    type: display_lcd
+    sub_type: parlio
+    version: default
+    dependencies:
+      espressif/esp_lcd_st7796: "*"
+    config:
+      x_max: 320
+      y_max: 320
+      invert_color: true
+      mirror_x: true
+      mirror_y: false
+      need_reset: true
+      io_parl_config:
+        dc_gpio_num: 18
+        clk_gpio_num: 17
+        cs_gpio_num: 19
+        data_gpio_nums: [44, 43, 42, 40, 39, 38, 37, 36]
+        data_width: 8
+        # First throughput step for the ST7796S 8-bit PARLIO bus. Revert to
+        # 10000000 if a particular panel shows signal-integrity artifacts.
+        pclk_hz: 15000000
+        clk_src: PARLIO_CLK_SRC_DEFAULT
+        # One complete 320x320 RGB565 frame per DMA transfer.
+        max_transfer_bytes: 204800
+        dma_burst_size: 64
+        trans_queue_depth: 10
+        lcd_cmd_bits: 8
+        lcd_param_bits: 8
+        dc_levels:
+          dc_cmd_level: 0
+          dc_data_level: 1
+        flags:
+          cs_active_high: false
+      lcd_panel_config:
+        reset_gpio_num: 35
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_BGR
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        bits_per_pixel: 16
+        flags:
+          reset_active_high: false
+        vendor_config: NULL
+
+  - name: lcd_touch
+    chip: ft6336
+    type: lcd_touch
+    sub_type: i2c
+    version: default
+    dependencies:
+      lambage/esp_lcd_touch_ft6336u: "^1.0.8"
+    config:
+      io_i2c_config:
+        dev_addr: 0x70
+        control_phase_bytes: 1
+        dc_bit_offset: 0
+        lcd_cmd_bits: 8
+        lcd_param_bits: 8
+        scl_speed_hz: 400000
+        flags:
+          disable_control_phase: true
+      touch_config:
+        x_max: 319
+        y_max: 319
+        rst_gpio_num: -1
+        int_gpio_num: -1
+        levels:
+          reset: 0
+          interrupt: 0
+        flags:
+          swap_xy: false
+          mirror_x: true
+          mirror_y: false
+    peripherals:
+      - name: i2c_master
+        i2c_addr: [0x70]
+
+  - name: fs_sdcard
+    type: fs_fat
+    sub_type: sdmmc
+    version: default
+    init_skip: true
+    config:
+      mount_point: "/sdcard"
+      vfs_config:
+        format_if_mount_failed: false
+        max_files: 5
+        allocation_unit_size: 16384
+      sub_config:
+        slot: SDMMC_HOST_SLOT_1
+        frequency: SDMMC_FREQ_HIGHSPEED
+        bus_width: 4
+        slot_flags: SDMMC_SLOT_FLAG_INTERNAL_PULLUP
+        pins:
+          clk: 24
+          cmd: 25
+          d0: 20
+          d1: 21
+          d2: 22
+          d3: 23
+          d4: -1
+          d5: -1
+          d6: -1
+          d7: -1
+          cd: -1
+          wp: -1
+        ldo_chan_id: -1
