@@ -1,0 +1,5 @@
+version: 1.4.0
+description: Local ESP LCD ST7796 1.4.0 compatibility copy for ESP32-S31.
+license: Apache-2.0
+dependencies:
+  idf: ">=4.4"

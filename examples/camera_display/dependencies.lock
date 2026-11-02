@@ -1,0 +1,38 @@
+dependencies:
+  espressif/esp_lcd_st7796:
+    dependencies:
+    - name: idf
+      version: '>=4.4'
+    source:
+      path: ../display_touch_test/components/esp_lcd_st7796
+      type: local
+    version: 1.4.0
+  haqqscripter/esp_cam_io_parl:
+    component_hash: b4d0d074ac6720f01a5e4e407b106e4842bc15141d0d9d9026890be7fa3ea091
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32c6
+    - esp32h2
+    - esp32p4
+    - esp32c5
+    - esp32h4
+    - esp32h21
+    - esp32s31
+    version: 0.1.0
+  idf:
+    source:
+      type: idf
+    version: 6.1.0
+direct_dependencies:
+- espressif/esp_lcd_st7796
+- haqqscripter/esp_cam_io_parl
+- idf
+manifest_hash: 7efbec27442472a966f888ecdece03e673818a03da51ce45dd6479511ef80843
+target: esp32s31
+version: 3.0.0

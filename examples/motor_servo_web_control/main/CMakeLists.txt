@@ -1,0 +1,20 @@
+idf_component_register(
+    SRCS
+        main.cpp
+        actuator_control.cpp
+        display_ui.cpp
+        web_server.cpp
+        wifi_manager.cpp
+    INCLUDE_DIRS .
+    PRIV_REQUIRES
+        esp_driver_gpio
+        esp_driver_i2c
+        esp_driver_ledc
+        esp_event
+        esp_http_server
+        esp_lcd
+        esp_netif
+        esp_timer
+        esp_wifi
+        nvs_flash
+)
