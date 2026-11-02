@@ -1,4 +1,7 @@
 CONFIG_IDF_TARGET="esp32s31"
+# ESP-IDF 6.1 promotes default warnings (including LVGL deprecations) to
+# errors; keep the existing LVGL compatibility calls buildable during migration.
+CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS=y
 CONFIG_COMPILER_CXX_EXCEPTIONS=y
 CONFIG_COMPILER_CXX_EXCEPTIONS_EMG_POOL_SIZE=1024
 
