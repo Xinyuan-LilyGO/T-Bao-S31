@@ -1,0 +1,5 @@
+version: 1.8.0
+description: Local WebSocket client wrapper with cache-safe internal task stacks and guarded lifecycle reclamation.
+license: Apache-2.0
+dependencies:
+  idf: ">=5.0"

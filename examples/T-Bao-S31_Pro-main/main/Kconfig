@@ -1,0 +1,38 @@
+menu "Xiaozhi Chat Application"
+    menuconfig TBAO_CAMERA_SUPPORT
+        bool "Enable T-Bao S31 camera"
+        default y
+        help
+            Enable the OV2640/OV3660 PARLIO JPEG camera used by T-Bao S31.
+
+    config TBAO_CAMERA_OV3660
+        bool "Use OV3660 camera power profile"
+        depends on TBAO_CAMERA_SUPPORT
+        default n
+        help
+            Select this when the fitted camera module is OV3660. The runtime
+            probe rejects OV2640 when this profile is selected.
+
+    config TBAO_CAMERA_OV2640_CORE_1V3
+        bool "Use 1.3V OV2640 DVDD profile"
+        depends on TBAO_CAMERA_SUPPORT && !TBAO_CAMERA_OV3660
+        default n
+        help
+            Select the optional 1.3V OV2640 core-voltage profile. The default
+            OV2640 profile is approximately 1.2V.
+
+    choice XIAOZHI_CHAT_APP_TRANSPORT
+        prompt "Preferred transport when both MQTT and WebSocket are supported"
+        default XIAOZHI_CHAT_APP_TRANSPORT_AUTO
+        help
+            When the server provides both MQTT and WebSocket, this option selects which to use.
+            If "Auto (prefer MQTT)" is selected, MQTT is used when both are available.
+
+        config XIAOZHI_CHAT_APP_TRANSPORT_AUTO
+            bool "Auto (prefer MQTT)"
+        config XIAOZHI_CHAT_APP_TRANSPORT_MQTT
+            bool "MQTT"
+        config XIAOZHI_CHAT_APP_TRANSPORT_WEBSOCKET
+            bool "WebSocket"
+    endchoice
+endmenu

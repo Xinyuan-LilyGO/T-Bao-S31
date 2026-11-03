@@ -1,0 +1,11 @@
+[
+    {"emote": "happy",    "src": "Happy.eaf",    "loop": true,  "fps": 20},
+    {"emote": "sad",      "src": "Sad.eaf",      "loop": true,  "fps": 20},
+    {"emote": "crying",   "src": "cry.eaf",      "loop": true,  "fps": 20},
+    {"emote": "sleepy",   "src": "sleep.eaf",    "loop": true,  "fps": 20},
+    {"emote": "angry",    "src": "angry.eaf",    "loop": true,  "fps": 20},
+    {"emote": "shocked",  "src": "shocked.eaf",  "loop": true,  "fps": 20},
+    {"emote": "confused", "src": "confused.eaf", "loop": true,  "fps": 20},
+    {"emote": "neutral",  "src": "neutral.eaf",  "loop": false, "fps": 20},
+    {"emote": "winking",  "src": "winking.eaf",  "loop": true,  "fps": 20}
+]

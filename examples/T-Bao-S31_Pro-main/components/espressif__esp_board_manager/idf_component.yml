@@ -1,0 +1,44 @@
+dependencies:
+  espressif/button:
+    matches:
+    - if: $CONFIG{ESP_BOARD_DEV_BUTTON_SUPPORT} == True
+    require: public
+    version: ^4.1.4
+  espressif/esp_codec_dev:
+    matches:
+    - if: $CONFIG{ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT} == True
+    require: public
+    version: ~1.5
+  espressif/esp_io_expander:
+    matches:
+    - if: $CONFIG{ESP_BOARD_DEV_GPIO_EXPANDER_SUPPORT} == True
+    require: public
+    version: ^1.0.1
+  espressif/esp_lcd_touch:
+    matches:
+    - if: $CONFIG{ESP_BOARD_DEV_LCD_TOUCH_I2C_SUPPORT} == True
+    - if: $CONFIG{ESP_BOARD_DEV_LCD_TOUCH_SUPPORT} == True
+    require: public
+    version: '*'
+  espressif/esp_video:
+    matches:
+    - if: $CONFIG{ESP_BOARD_DEV_CAMERA_SUPPORT} == True
+    require: public
+    version: ^2.0.0
+  espressif/led_strip:
+    matches:
+    - if: $CONFIG{ESP_BOARD_DEV_LED_STRIP_SUPPORT} == True
+    require: public
+    version: '*'
+description: Board manager for ESP-GMF
+documentation: https://github.com/espressif/esp-gmf/blob/main/packages/esp_board_manager/README.md
+issues: https://github.com/espressif/esp-gmf/issues
+repository: git://github.com/espressif/esp-gmf.git
+repository_info:
+  commit_sha: 38e97d4f41ee17618bd8399f4581268211a7c4e8
+  path: ./packages/esp_board_manager
+tags:
+- gmf
+- board_manager
+url: https://github.com/espressif/esp-gmf/tree/main/packages/esp_board_manager
+version: 0.5.10

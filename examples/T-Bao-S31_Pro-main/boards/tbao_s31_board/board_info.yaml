@@ -1,0 +1,5 @@
+board: tbao_s31_board
+chip: esp32s31
+version: 1.0.0
+description: "T-Bao S31 board - OV2640/OV3660 camera, ST7796S LCD and ES8389/ES7210 audio"
+manufacturer: "T-Bao"

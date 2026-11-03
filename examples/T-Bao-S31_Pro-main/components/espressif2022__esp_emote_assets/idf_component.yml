@@ -1,0 +1,14 @@
+dependencies:
+  idf:
+    version: '>=5.0'
+description: ESP Emote Assets - Asset management component for ESP-IDF, providing
+  SPIFFS assets generation and management tools.
+documentation: https://github.com/espressif2022/esp_emote_assets
+issues: https://github.com/espressif2022/esp_emote_assets/issues
+license: Apache-2.0
+repository: git://github.com/espressif2022/esp_emote_assets.git
+repository_info:
+  commit_sha: 29aa5259ac22651b8636683698c021482050b206
+  path: .
+url: https://github.com/espressif2022/esp_emote_assets
+version: 0.1.2

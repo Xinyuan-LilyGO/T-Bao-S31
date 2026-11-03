@@ -1,0 +1,46 @@
+menu "Expression Emote Configuration"
+
+    config EMOTE_DEF_SCROLL_SPEED
+        int "Default label scroll speed(ms)"
+        default 10
+
+    config EMOTE_DEF_LABEL_HEIGHT
+        int "Default label height(pixels)"
+        default 30
+
+    config EMOTE_DEF_LABEL_WIDTH
+        int "Default label width(pixels)"
+        default 100
+
+    config EMOTE_DEF_LABEL_Y_OFFSET
+        int "Default label Y offset(pixels)"
+        default 20
+        help
+            Default Y offset for emote labels in pixels.
+
+    config EMOTE_DEF_ANIMATION_FPS
+        int "Default animation FPS"
+        default 20
+        range 1 60
+
+    config EMOTE_DEF_FONT_COLOR
+        hex "Default font color"
+        default 0xFFFFFF
+        help
+            Default font color in RGB format (0xRRGGBB).
+
+    config EMOTE_DEF_BG_COLOR
+        hex "Default background color"
+        default 0x000000
+        help
+            Default font color in RGB format (0xRRGGBB).
+
+    config EMOTE_ASSETS_HASH_TABLE_SIZE
+        int "Assets hash table size"
+        default 32
+        range 8 256
+        help
+            Size of the hash table for assets storage. Larger values use more memory
+            but provide better performance for many assets.
+
+endmenu
