@@ -23,6 +23,7 @@
 #include "app_music_player.h"
 #include "app_language.h"
 #include "app_sdcard.h"
+#include "esp_attr.h"
 #include "esp_xiaozhi_chat_display.h"
 #include "lvgl.h"
 #include "font_awesome_symbols.h"
@@ -82,7 +83,9 @@ static void library_hide(void);
 
 /* SD card music list (only source of tracks — network demo tracks removed). */
 #define SD_MAX_ITEMS 8
-static app_sdcard_music_item_t s_sd_items[SD_MAX_ITEMS];
+/* Scan results (8 x 428 bytes) are plain UI data; keep them out of internal
+ * .bss so the DIRAM stays available for the heap. */
+static EXT_RAM_BSS_ATTR app_sdcard_music_item_t s_sd_items[SD_MAX_ITEMS];
 static int s_sd_count = 0;
 
 /* Simulated progress */

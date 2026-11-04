@@ -429,7 +429,8 @@ static void battery_monitor_display_callback(
     (void)context;
     if (state != NULL) {
         (void)esp_xiaozhi_chat_display_set_battery(
-            state->battery_percent, state->charging, state->valid);
+            state->battery_percent, state->charging,
+            state->valid || state->data_stale);
     }
 }
 

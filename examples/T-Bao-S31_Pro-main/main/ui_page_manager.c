@@ -5,6 +5,7 @@
 
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "esp_lvgl_port.h"
 #include "esp_xiaozhi_chat_app.h"
@@ -298,6 +299,28 @@ esp_err_t ui_page_manager_switch(ui_page_id_t id)
         indicator_rebuild();
     }
     ESP_LOGI(TAG, "switched to page %d (%s)", s_cur, s_pages[id]->name);
+
+    /* Page builds are the heaviest ordinary LVGL allocation burst. Logging the
+     * internal heap here makes a leak or a page that permanently eats SRAM
+     * visible in the serial log: internal free/largest should return to a
+     * stable plateau after leaving the page, and the largest block must stay
+     * well above the ~100 bytes needed by esp_timer_create() in the Wi-Fi
+     * power-save path. */
+    const size_t internal_free =
+        heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t internal_largest =
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (internal_largest < 2048) {
+        ESP_LOGW(TAG,
+                 "internal SRAM low after %s: free=%u largest=%u - Wi-Fi/TLS "
+                 "allocations may fail",
+                 s_pages[id]->name, (unsigned)internal_free,
+                 (unsigned)internal_largest);
+    } else {
+        ESP_LOGI(TAG, "internal SRAM after %s: free=%u largest=%u",
+                 s_pages[id]->name, (unsigned)internal_free,
+                 (unsigned)internal_largest);
+    }
 
     if (locked) {
         lvgl_port_unlock();

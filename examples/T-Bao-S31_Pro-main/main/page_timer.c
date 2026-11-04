@@ -15,6 +15,7 @@
 
 #include "app_sfx.h"
 #include "app_language.h"
+#include "esp_attr.h"
 #include "esp_xiaozhi_chat_display.h"
 #include "launcher_icons.h"
 #include "lvgl.h"
@@ -51,7 +52,9 @@ static lv_obj_t *s_duration_roller = NULL;
 static lv_obj_t *s_selected_duration_label = NULL;
 static lv_obj_t *s_preset_buttons[TIMER_PRESET_COUNT] = { 0 };
 
-static char s_duration_options[TIMER_OPTIONS_BUFFER_SIZE];
+/* ~8.6 KiB of option labels built once for the roller widget. Plain UI text,
+ * no DMA/ISR use; keep it in PSRAM to leave the DIRAM for the heap. */
+static EXT_RAM_BSS_ATTR char s_duration_options[TIMER_OPTIONS_BUFFER_SIZE];
 static bool s_duration_options_ready;
 
 static int32_t s_duration_ms = TIMER_DEFAULT_MINUTES * 60000;

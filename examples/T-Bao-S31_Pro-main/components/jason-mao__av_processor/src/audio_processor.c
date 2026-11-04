@@ -441,6 +441,15 @@ static esp_err_t recorder_setup_afe_config(void)
         ESP_LOGE(TAG, "Failed to initialize AFE config");
         return ESP_FAIL;
     }
+    /* The AFE (WakeNet + AEC + VAD + AGC) is the largest internal-SRAM consumer
+     * once Xiaozhi is enabled: switching the assistant on drops free internal
+     * SRAM by roughly 80 KiB. ESP-SR can keep the AFE working buffers in PSRAM;
+     * only what the accelerators require stays internal. Keep the internal heap
+     * for Wi-Fi/TLS/LVGL instead. If wake-word detection becomes unreliable,
+     * fall back to AFE_MEMORY_ALLOC_INTERNAL_PSRAM_BALANCE. */
+#if CONFIG_SPIRAM_BOOT_INIT
+    audio_recorder.afe_cfg->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
+#endif
     audio_recorder.afe_cfg->aec_init = true;
     audio_recorder.afe_cfg->vad_init = cfg ? cfg->vad_enable : true;
     if (audio_recorder.afe_cfg->vad_init) {
@@ -455,12 +464,13 @@ static esp_err_t recorder_setup_afe_config(void)
     audio_recorder.afe_cfg->afe_linear_gain = 1.0f;
     audio_recorder.afe_cfg->agc_target_level_dbfs = -12;
     audio_recorder.afe_cfg->agc_compression_gain_db = 12;
-    ESP_LOGI(TAG, "[AFE_GAIN] linear_gain=%.1f agc_target_dbfs=%d agc_compression_db=%d wakenet_init=%d afe_type=%d",
+    ESP_LOGI(TAG, "[AFE_GAIN] linear_gain=%.1f agc_target_dbfs=%d agc_compression_db=%d wakenet_init=%d afe_type=%d mem_alloc_mode=%d",
              audio_recorder.afe_cfg->afe_linear_gain,
              audio_recorder.afe_cfg->agc_target_level_dbfs,
              audio_recorder.afe_cfg->agc_compression_gain_db,
              audio_recorder.afe_cfg->wakenet_init,
-             audio_recorder.afe_cfg->afe_type);
+             audio_recorder.afe_cfg->afe_type,
+             (int)audio_recorder.afe_cfg->memory_alloc_mode);
 
     esp_gmf_afe_manager_cfg_t afe_manager_cfg = DEFAULT_GMF_AFE_MANAGER_CFG(audio_recorder.afe_cfg, NULL, NULL, NULL, NULL);
     if (audio_recorder.config.afe_feed_task_config.task_stack > 0) {

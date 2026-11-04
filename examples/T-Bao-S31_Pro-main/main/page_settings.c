@@ -41,6 +41,7 @@ LV_FONT_DECLARE(font_puhui_20_4);
 typedef enum {
     SETTINGS_ACTION_NONE = 0,
     SETTINGS_ACTION_RESTART,
+    SETTINGS_ACTION_SLEEP,
     SETTINGS_ACTION_RESET_PREFERENCES,
     SETTINGS_ACTION_RESET_WIFI,
 } settings_action_t;
@@ -549,6 +550,12 @@ static const char *battery_connection_text(
     if (state == NULL || !state->device_present || !state->part_id_valid) {
         return app_language_text("暂不可用", "Unavailable");
     }
+    if (state->data_stale) {
+        return app_language_text("数据暂未更新", "Data temporarily stale");
+    }
+    if (state->low_voltage_warning) {
+        return app_language_text("电量过低", "Battery low");
+    }
     if (state->charge_done) {
         return app_language_text("已充满", "Full");
     }
@@ -605,12 +612,13 @@ static void refresh_battery_detail_labels(
     const char *connection = battery_connection_text(state);
     if (s_battery_status != NULL) {
         lv_label_set_text(s_battery_status, connection);
-        const uint32_t color = state->charging ? SETTINGS_ORANGE
-            : (state->charge_done ? 0x34C759 : SETTINGS_BLUE);
+        const uint32_t color = state->low_voltage_warning ? SETTINGS_RED
+            : ((state->data_stale || state->charging) ? SETTINGS_ORANGE
+               : (state->charge_done ? 0x34C759 : SETTINGS_BLUE));
         lv_obj_set_style_text_color(s_battery_status, lv_color_hex(color), 0);
     }
     if (s_battery_percent != NULL) {
-        if (state->valid && state->battery_percent >= 0) {
+        if ((state->valid || state->data_stale) && state->battery_percent >= 0) {
             lv_label_set_text_fmt(s_battery_percent,
                                   app_language_is_english() ? "Battery: %d%%" :
                                                               "电量：%d%%",
@@ -621,7 +629,7 @@ static void refresh_battery_detail_labels(
         }
     }
     if (s_battery_voltage != NULL) {
-        if (state->valid) {
+        if (state->valid || state->data_stale) {
             lv_label_set_text_fmt(
                 s_battery_voltage,
                 app_language_is_english() ? "Battery: %dmV · System: %dmV" :
@@ -633,7 +641,7 @@ static void refresh_battery_detail_labels(
         }
     }
     if (s_battery_input != NULL) {
-        if (state->valid) {
+        if (state->valid || state->data_stale) {
             lv_label_set_text_fmt(
                 s_battery_input,
                 app_language_is_english() ? "Input: %dmV · Charge current: %dmA" :
@@ -659,8 +667,11 @@ static void refresh_battery_detail_labels(
     }
     if (s_battery_detail != NULL) {
         lv_label_set_text(s_battery_detail,
-                          state->detail[0] != '\0' ? state->detail :
-                            app_language_text("状态正常", "Status normal"));
+                          state->data_stale
+                              ? app_language_text("数据暂未更新，显示最近有效读数",
+                                                  "Showing the last valid readings")
+                              : (state->detail[0] != '\0' ? state->detail :
+                                 app_language_text("状态正常", "Status normal")));
     }
 }
 
@@ -673,7 +684,7 @@ static void refresh_battery_status(void)
                            state.device_present && state.part_id_valid;
 
     if (s_home_battery_status != NULL) {
-        if (available && state.valid && state.battery_percent >= 0) {
+        if (available && (state.valid || state.data_stale) && state.battery_percent >= 0) {
             lv_label_set_text_fmt(
                 s_home_battery_status,
                 app_language_is_english() ? "Battery %d%% · %s" :
@@ -758,17 +769,17 @@ static void language_option_cb(lv_event_t *event)
 
 static void build_language_detail(void)
 {
-    lv_obj_t *card = create_section(s_content, "语言", 166);
+    lv_obj_t *card = create_section(s_content, "语言 / Language", 166);
     if (card == NULL) {
         return;
     }
-    lv_obj_t *hint = make_label(card, "选择界面语言",
+    lv_obj_t *hint = make_label(card, "选择语言 / Choose language",
                                 &font_puhui_16_4, SETTINGS_MUTED);
     if (hint != NULL) {
         lv_obj_set_pos(hint, 12, 40);
     }
-    make_language_button(card, 66, "中文", APP_LANGUAGE_ZH_CN);
-    make_language_button(card, 114, "English", APP_LANGUAGE_EN_US);
+    make_language_button(card, 66, "中文 / Chinese", APP_LANGUAGE_ZH_CN);
+    make_language_button(card, 114, "English / 英文", APP_LANGUAGE_EN_US);
 }
 
 void page_settings_open_battery(void)
@@ -944,6 +955,15 @@ static void build_device_section(void)
     refresh_sd_status();
 }
 
+static void sleep_cb(lv_event_t *event)
+{
+    (void)event;
+    app_sfx_play(APP_SFX_TAP);
+    show_confirmation(SETTINGS_ACTION_SLEEP, "关机休眠",
+                      "进入深度休眠，屏幕熄灭。\n若无法唤醒，请按复位键。",
+                      SETTINGS_ORANGE);
+}
+
 static void restart_cb(lv_event_t *event)
 {
     (void)event;
@@ -964,12 +984,13 @@ static void reset_preferences_cb(lv_event_t *event)
 
 static void build_system_section(void)
 {
-    lv_obj_t *card = create_section(s_content, "系统", 138);
+    lv_obj_t *card = create_section(s_content, "系统", 184);
     if (card == NULL) {
         return;
     }
-    make_action_button(card, 42, "重启设备", SETTINGS_ORANGE, restart_cb);
-    make_action_button(card, 88, "恢复设置默认值", SETTINGS_RED,
+    make_action_button(card, 42, "关机休眠", SETTINGS_RED, sleep_cb);
+    make_action_button(card, 88, "重启设备", SETTINGS_ORANGE, restart_cb);
+    make_action_button(card, 134, "恢复设置默认值", SETTINGS_RED,
                        reset_preferences_cb);
 }
 
@@ -1024,7 +1045,9 @@ static void build_settings_home(void)
                          FONT_AWESOME_GEAR, 0x8B6CE8,
                          SETTINGS_VIEW_DISPLAY,
                          &s_home_display_status);
-    make_navigation_card(s_content, "语言", app_language_name(),
+    const char *language_status = app_language_is_english()
+        ? "English / 英文" : "中文 / Chinese";
+    make_navigation_card(s_content, "语言 / Language", language_status,
                          FONT_AWESOME_GEAR, 0x7C83FD,
                          SETTINGS_VIEW_LANGUAGE, NULL);
     make_navigation_card(s_content, "小智 AI", "读取中", FONT_AWESOME_AI_CHIP,
@@ -1036,7 +1059,7 @@ static void build_settings_home(void)
     make_navigation_card(s_content, "存储与设备", "检测中",
                           FONT_AWESOME_SD_CARD, 0x20A6B2,
                           SETTINGS_VIEW_DEVICE, &s_home_device_status);
-    make_navigation_card(s_content, "系统", "重启与恢复选项",
+    make_navigation_card(s_content, "系统", "关机、重启与恢复",
                          FONT_AWESOME_POWER, 0xD45C62,
                           SETTINGS_VIEW_SYSTEM, NULL);
     refresh_home_status();
@@ -1065,7 +1088,13 @@ static void confirm_apply_cb(lv_event_t *event)
     }
     s_confirm_action = SETTINGS_ACTION_NONE;
 
-    if (action == SETTINGS_ACTION_RESET_WIFI) {
+    if (action == SETTINGS_ACTION_SLEEP) {
+        if (battery_monitor_request_sleep() == ESP_OK) {
+            set_notice("正在进入休眠", SETTINGS_ORANGE);
+        } else {
+            set_notice("关机休眠不可用，请重启设备", SETTINGS_RED);
+        }
+    } else if (action == SETTINGS_ACTION_RESET_WIFI) {
         wifi_creds_erase_and_reboot();
     } else if (action == SETTINGS_ACTION_RESET_PREFERENCES) {
         if (app_settings_reset() == ESP_OK) {
@@ -1153,7 +1182,7 @@ static const char *settings_view_title(settings_view_t view)
     case SETTINGS_VIEW_XIAOZHI: return "小智 AI";
     case SETTINGS_VIEW_DEVICE: return "存储与设备";
     case SETTINGS_VIEW_SYSTEM: return "系统";
-    case SETTINGS_VIEW_LANGUAGE: return "语言";
+    case SETTINGS_VIEW_LANGUAGE: return "语言 / Language";
     case SETTINGS_VIEW_HOME:
     default: return "设置";
     }

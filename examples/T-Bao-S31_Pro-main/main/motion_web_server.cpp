@@ -16,6 +16,7 @@
 #include "freertos/semphr.h"
 #include "actuator_control.h"
 #include "app_face_follow.h"
+#include "app_language.h"
 #include "motion_behavior.h"
 #include "motion_manager.h"
 
@@ -88,17 +89,37 @@ button{border:1px solid var(--line);border-radius:7px;background:#202d3d;color:v
 <script>
 const $=id=>document.getElementById(id),pad=$('pad'),knob=$('knob'),speed=$('speed'),servoUs=$('servoUs'),servoEnabled=$('servoEnabled');
 let active=false,pointerId=null,x=0,y=0,webEpoch=0,motionInFlight=false,actionInFlight=false,motionPending=false,motionAbort=null,pendingAction='',servoControlOwned=false,stateRequestSerial=0;
-function paintVector(){ $('vector').textContent=`${x} / ${y}`; $('speedValue').textContent=`${speed.value}%`; $('servoValue').textContent=`${servoEnabled.checked?'保持 ':'关闭 '}${servoUs.value} us`; }
+let uiEnglish=false,appliedLanguage='';
+const staticTranslations={
+'桌面移动控制':'Desktop Motion Control','差速摇杆 · 浏览器实时续租 · 释放即停车':'Differential joystick · Live browser control · Release to stop','停止全部':'Stop All','设备连接':'Device','连接中':'Connecting','前':'Forward','后':'Back','左':'Left','右':'Right','按住并拖动摇杆，松开后自动停车':'Hold and drag the joystick. Release to stop.','速度上限':'Speed Limit','由运动管理器执行加减速':'Acceleration managed by the motion controller','慢':'Slow','中':'Medium','快':'Fast','头部点头':'Head Tilt','保持':'Hold','低头':'Down','中心':'Center','抬头':'Up','回中心':'Center Head','摇杆指令':'Joystick Command','电机输出':'Motor Output','估算位置':'Estimated Position','估算朝向':'Estimated Heading','当前来源':'Control Source','保护状态':'Safety Status','软件桌面边界已关闭，位置仅用于观察，不能防止跌落。请只在桌面中央、远离边缘测试。':'Software desk boundaries are off. Position is for reference only and cannot prevent falls. Test near the center of the desk, away from edges.','Web 控制服务：设备 IP 的 81 端口 · 连接中断后请求会自动过期':'Web control: port 81 at the device IP · Commands expire after disconnection'};
+const reverseTranslations=Object.fromEntries(Object.entries(staticTranslations).map(([zh,en])=>[en,zh]));
+function tr(zh,en){return uiEnglish?en:zh}
+function applyLanguage(){
+ const language=uiEnglish?'en':'zh-CN';
+ if(appliedLanguage===language)return;
+ appliedLanguage=language;
+ document.documentElement.lang=language;
+ document.title=uiEnglish?'T-Bao S31 · Motion Control':'T-Bao S31 · 移动控制';
+ const dictionary=uiEnglish?staticTranslations:reverseTranslations;
+ const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+ while(walker.nextNode()){
+  const value=walker.currentNode.nodeValue,trimmed=value.trim(),translated=dictionary[trimmed];
+  if(translated)walker.currentNode.nodeValue=value.replace(trimmed,translated);
+ }
+ pad.setAttribute('aria-label',tr('小车移动摇杆','Robot motion joystick'));
+}
+function paintVector(){ $('vector').textContent=`${x} / ${y}`; $('speedValue').textContent=`${speed.value}%`; $('servoValue').textContent=`${servoEnabled.checked?tr('保持 ','Hold '):tr('关闭 ','Off ')}${servoUs.value} us`; }
 function resetKnob(){x=0;y=0;knob.style.left='50%';knob.style.top='50%';paintVector();}
 function setPoint(ev){const r=pad.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,limit=r.width*.38;let dx=(ev.clientX-cx)/limit,dy=(cy-ev.clientY)/limit,len=Math.hypot(dx,dy);if(len>1){dx/=len;dy/=len}x=Math.round(dx*100);y=Math.round(dy*100);knob.style.left=`${50+dx*38}%`;knob.style.top=`${50-dy*38}%`;paintVector();}
-function flushAction(){if(actionInFlight||!pendingAction){return}const action=pendingAction;pendingAction='';actionInFlight=true;fetch(action,{method:'POST',cache:'no-store'}).then(async r=>{if(!r.ok)throw new Error('action');const state=await r.json();applyState(state);if(action==='/api/release'||action==='/api/stop'){servoUs.value=1500;servoEnabled.checked=false;servoControlOwned=false;paintVector()}}).catch(()=>setLink('连接断开','bad')).finally(()=>{actionInFlight=false;if(pendingAction){flushAction()}else if((active||servoEnabled.checked)&&motionPending){motionPending=false;sendMotion()}})}
+function flushAction(){if(actionInFlight||!pendingAction){return}const action=pendingAction;pendingAction='';actionInFlight=true;fetch(action,{method:'POST',cache:'no-store'}).then(async r=>{if(!r.ok)throw new Error('action');const state=await r.json();applyState(state);if(action==='/api/release'||action==='/api/stop'){servoUs.value=1500;servoEnabled.checked=false;servoControlOwned=false;paintVector()}}).catch(()=>setLink(tr('连接断开','Disconnected'),'bad')).finally(()=>{actionInFlight=false;if(pendingAction){flushAction()}else if((active||servoEnabled.checked)&&motionPending){motionPending=false;sendMotion()}})}
 function queueAction(action){active=false;pointerId=null;motionPending=false;servoControlOwned=true;stateRequestSerial++;if(action==='/api/stop'||action==='/api/release'){servoEnabled.checked=false;paintVector()}if(motionAbort!==null)motionAbort.abort();pendingAction=action;resetKnob();if(!actionInFlight)flushAction()}
-function sendMotion(){if(!active&&!servoEnabled.checked){return}servoControlOwned=true;stateRequestSerial++;if(motionInFlight||actionInFlight){motionPending=true;return}motionInFlight=true;const controller=new AbortController();motionAbort=controller;const body=new URLSearchParams({x:String(x),y:String(y),speed:String(speed.value),servoUs:String(servoUs.value),servoEnabled:servoEnabled.checked?'1':'0',epoch:String(webEpoch)});fetch('/api/motion',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body,cache:'no-store',signal:controller.signal}).then(async r=>{if(!r.ok)throw new Error('motion');const result=await r.json();if(result.ok===false){loadState();return}setLink('在线','')}).catch(e=>{if(e.name!=='AbortError')setLink('控制不可用','bad')}).finally(()=>{if(motionAbort===controller)motionAbort=null;motionInFlight=false;if(pendingAction){flushAction()}else if((active||servoEnabled.checked)&&motionPending){motionPending=false;sendMotion()}else{motionPending=false}})}
+function sendMotion(){if(!active&&!servoEnabled.checked){return}servoControlOwned=true;stateRequestSerial++;if(motionInFlight||actionInFlight){motionPending=true;return}motionInFlight=true;const controller=new AbortController();motionAbort=controller;const body=new URLSearchParams({x:String(x),y:String(y),speed:String(speed.value),servoUs:String(servoUs.value),servoEnabled:servoEnabled.checked?'1':'0',epoch:String(webEpoch)});fetch('/api/motion',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body,cache:'no-store',signal:controller.signal}).then(async r=>{if(!r.ok)throw new Error('motion');const result=await r.json();if(result.ok===false){loadState();return}setLink(tr('在线','Online'),'')}).catch(e=>{if(e.name!=='AbortError')setLink(tr('控制不可用','Control unavailable'),'bad')}).finally(()=>{if(motionAbort===controller)motionAbort=null;motionInFlight=false;if(pendingAction){flushAction()}else if((active||servoEnabled.checked)&&motionPending){motionPending=false;sendMotion()}else{motionPending=false}})}
 function releaseMotion(){active=false;pointerId=null;motionPending=false;if(motionAbort!==null)motionAbort.abort();resetKnob();if(servoEnabled.checked){sendMotion()}else{queueAction('/api/release')}}
 function beaconRelease(){active=false;pointerId=null;motionPending=false;servoEnabled.checked=false;servoControlOwned=false;stateRequestSerial++;if(motionAbort!==null)motionAbort.abort();pendingAction='';resetKnob();navigator.sendBeacon('/api/release','');}
 function setLink(text,kind){const node=$('link');node.textContent=text;node.className=kind||'';}
-function applyState(s){if(typeof s.webEpoch==='number'&&s.webEpoch>=webEpoch){webEpoch=s.webEpoch}if(!s.available)setLink('运动不可用','bad');else if(s.faulted)setLink('故障锁定','bad');else if(s.failsafe)setLink('保护停车','warn');else setLink('在线','');$('motors').textContent=`A ${s.motorA}% · B ${s.motorB}%`;$('pose').textContent=`${Number(s.poseX).toFixed(1)}, ${Number(s.poseY).toFixed(1)} cm`;$('heading').textContent=`${s.headingDeg}°`;$('source').textContent=s.source||'空闲';$('safety').textContent=s.boundaryLimited?'边界限制':'软件边界关闭';if(!servoControlOwned){const nextServoUs=Number(s.servoUs);if(Number.isFinite(nextServoUs)&&nextServoUs>=1100&&nextServoUs<=1900){servoUs.value=nextServoUs}if(typeof s.servoEnabled==='boolean'){servoEnabled.checked=s.servoEnabled}}paintVector();}
-pad.addEventListener('pointerdown',ev=>{active=true;pointerId=ev.pointerId;pad.setPointerCapture(pointerId);setPoint(ev);sendMotion()});pad.addEventListener('pointermove',ev=>{if(active&&ev.pointerId===pointerId){setPoint(ev)}});pad.addEventListener('pointerup',releaseMotion);pad.addEventListener('pointercancel',releaseMotion);pad.addEventListener('lostpointercapture',()=>{if(active)releaseMotion()});speed.addEventListener('input',()=>{paintVector();if(active||servoEnabled.checked)sendMotion()});servoUs.addEventListener('input',()=>{servoControlOwned=true;servoEnabled.checked=true;paintVector();sendMotion()});servoEnabled.addEventListener('change',()=>{servoControlOwned=true;paintVector();if(servoEnabled.checked)sendMotion();else queueAction('/api/release')});$('centerServo').addEventListener('click',()=>{servoControlOwned=true;servoUs.value=1500;servoEnabled.checked=true;paintVector();sendMotion()});$('stop').addEventListener('click',()=>queueAction('/api/stop'));setInterval(()=>{if(active||servoEnabled.checked)sendMotion()},50);setInterval(loadState,250);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')beaconRelease()});window.addEventListener('pagehide',beaconRelease);async function loadState(){const requestSerial=++stateRequestSerial;try{const r=await fetch('/api/state',{cache:'no-store'});if(!r.ok)throw new Error('state');if(requestSerial!==stateRequestSerial)return;applyState(await r.json())}catch(e){if(e.name!=='AbortError')setLink('连接失败','bad')}}paintVector();loadState();
+function sourceLabel(source){if(uiEnglish)return source||'Idle';return {Web:'网页',Touch:'触摸',MCP:'MCP',Voice:'语音',Expression:'表情',Safety:'安全保护',Follow:'跟随',Idle:'空闲'}[source]||source||'空闲'}
+function applyState(s){uiEnglish=s.language==='en';applyLanguage();if(typeof s.webEpoch==='number'&&s.webEpoch>=webEpoch){webEpoch=s.webEpoch}if(!s.available)setLink(tr('运动不可用','Motion unavailable'),'bad');else if(s.faulted)setLink(tr('故障锁定','Fault locked'),'bad');else if(s.failsafe)setLink(tr('保护停车','Safety stop'),'warn');else setLink(tr('在线','Online'),'');$('motors').textContent=`A ${s.motorA}% · B ${s.motorB}%`;$('pose').textContent=`${Number(s.poseX).toFixed(1)}, ${Number(s.poseY).toFixed(1)} cm`;$('heading').textContent=`${s.headingDeg}°`;$('source').textContent=sourceLabel(s.source);$('safety').textContent=s.boundaryLimited?tr('边界限制','Boundary limited'):tr('软件边界关闭','Software boundary off');if(!servoControlOwned){const nextServoUs=Number(s.servoUs);if(Number.isFinite(nextServoUs)&&nextServoUs>=1100&&nextServoUs<=1900){servoUs.value=nextServoUs}if(typeof s.servoEnabled==='boolean'){servoEnabled.checked=s.servoEnabled}}paintVector();}
+pad.addEventListener('pointerdown',ev=>{active=true;pointerId=ev.pointerId;pad.setPointerCapture(pointerId);setPoint(ev);sendMotion()});pad.addEventListener('pointermove',ev=>{if(active&&ev.pointerId===pointerId){setPoint(ev)}});pad.addEventListener('pointerup',releaseMotion);pad.addEventListener('pointercancel',releaseMotion);pad.addEventListener('lostpointercapture',()=>{if(active)releaseMotion()});speed.addEventListener('input',()=>{paintVector();if(active||servoEnabled.checked)sendMotion()});servoUs.addEventListener('input',()=>{servoControlOwned=true;servoEnabled.checked=true;paintVector();sendMotion()});servoEnabled.addEventListener('change',()=>{servoControlOwned=true;paintVector();if(servoEnabled.checked)sendMotion();else queueAction('/api/release')});$('centerServo').addEventListener('click',()=>{servoControlOwned=true;servoUs.value=1500;servoEnabled.checked=true;paintVector();sendMotion()});$('stop').addEventListener('click',()=>queueAction('/api/stop'));setInterval(()=>{if(active||servoEnabled.checked)sendMotion()},50);setInterval(loadState,250);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')beaconRelease()});window.addEventListener('pagehide',beaconRelease);async function loadState(){const requestSerial=++stateRequestSerial;try{const r=await fetch('/api/state',{cache:'no-store'});if(!r.ok)throw new Error('state');if(requestSerial!==stateRequestSerial)return;applyState(await r.json())}catch(e){if(e.name!=='AbortError')setLink(tr('连接失败','Connection failed'),'bad')}}paintVector();loadState();
 </script>
 </body>
 </html>)HTML";
@@ -131,16 +152,17 @@ esp_err_t send_state(httpd_req_t *request)
     motion_manager_get_state(&state);
     const int heading = static_cast<int>(std::lround(
         state.pose.theta_rad * 180.0 / 3.14159265358979323846));
-    char response[448];
+    char response[480];
     const int length = std::snprintf(
         response,
         sizeof(response),
-        "{\"available\":%s,\"faulted\":%s,\"failsafe\":%s,"
+        "{\"language\":\"%s\",\"available\":%s,\"faulted\":%s,\"failsafe\":%s,"
         "\"webEpoch\":%" PRIu32 ",\"boundaryLimited\":%s,"
         "\"motorA\":%d,\"motorB\":%d,"
         "\"servoUs\":%d,\"servoEnabled\":%s,"
         "\"poseX\":%.1f,\"poseY\":%.1f,\"headingDeg\":%d,"
         "\"source\":\"%s\"}",
+        app_language_is_english() ? "en" : "zh",
         state.available ? "true" : "false",
         state.faulted ? "true" : "false",
         state.failsafe_active ? "true" : "false",
