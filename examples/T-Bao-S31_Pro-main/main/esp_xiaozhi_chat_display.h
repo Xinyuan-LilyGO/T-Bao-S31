@@ -128,6 +128,20 @@ esp_err_t esp_xiaozhi_chat_display_set_brightness(int brightness);
 esp_err_t esp_xiaozhi_chat_display_set_notification(const char *notification, int duration_ms);
 
 /**
+ * @brief Show or update the global low-voltage shutdown countdown.
+ *
+ * The popup is attached to the display's top layer, independently of pages.
+ * Repeated updates preserve user dismissal; hiding the popup does not cancel
+ * backend protection. A value of zero displays the final shutdown state.
+ */
+esp_err_t esp_xiaozhi_chat_display_show_shutdown_countdown(int seconds);
+
+/**
+ * @brief Hide the global low-voltage shutdown countdown popup.
+ */
+esp_err_t esp_xiaozhi_chat_display_hide_shutdown_countdown(void);
+
+/**
  * @brief  Set emotion icon on display
  *
  * @param[in] emotion  Emotion name (e.g., "happy", "sad", "neutral")

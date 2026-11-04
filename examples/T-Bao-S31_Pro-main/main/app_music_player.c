@@ -14,6 +14,7 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_audio_simple_player.h"
 
@@ -24,7 +25,7 @@ static int   s_sample_rate = 16000;
 static int   s_channels    = 2;     /* ES8389 opened in stereo on this board */
 static esp_asp_handle_t s_player = NULL;
 static app_music_state_t s_state = APP_MUSIC_STOPPED;
-static char s_cur_url[512] = {0};
+static EXT_RAM_BSS_ATTR char s_cur_url[512];
 
 /* --- out callback: simple player -> codec -------------------------------- */
 

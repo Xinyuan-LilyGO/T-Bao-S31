@@ -201,6 +201,9 @@ static const char *battery_tile_connection_text(
     if (state == NULL || !state->device_present || !state->part_id_valid) {
         return app_language_text("检测中", "Checking...");
     }
+    if (state->data_stale) {
+        return app_language_text("数据暂未更新", "Data temporarily stale");
+    }
     if (state->charge_done) {
         return app_language_text("已充满", "Full");
     }
@@ -223,7 +226,7 @@ static void update_battery_ui(void)
     battery_monitor_state_t state = {0};
     const bool available = battery_monitor_get_state(&state) == ESP_OK &&
                            state.device_present && state.part_id_valid;
-    const bool percent_valid = available && state.valid &&
+    const bool percent_valid = available && (state.valid || state.data_stale) &&
                                state.battery_percent >= 0 &&
                                state.battery_percent <= 100;
 

@@ -4,9 +4,11 @@
 #include <string.h>
 
 #include "actuator_control.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
@@ -617,7 +619,9 @@ static void manager_task(void *arg)
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(MOTION_MANAGER_PERIOD_MS));
     }
     s_task = NULL;
-    vTaskDelete(NULL);
+    /* Matching delete for xTaskCreatePinnedToCoreWithCaps: a plain
+     * vTaskDelete would leak the PSRAM stack and the TCB. */
+    vTaskDeleteWithCaps(NULL);
 }
 
 esp_err_t motion_manager_init(void)
@@ -674,8 +678,14 @@ esp_err_t motion_manager_init(void)
 
     s_available = true;
     s_running = true;
-    if (xTaskCreate(manager_task, "motion_manager", 4096, NULL, 6,
-                    &s_task) != pdPASS) {
+    /* Servo/LEDC/I2C only - never starts a flash/NVS operation - so the stack
+     * can live in PSRAM and keep 4 KiB of internal SRAM for Wi-Fi/AFE.  This
+     * task is always created through the WithCaps API (and deleted with
+     * vTaskDeleteWithCaps below); mixing in a plain fallback would make that
+     * delete path free a non-WithCaps stack. */
+    if (xTaskCreatePinnedToCoreWithCaps(
+            manager_task, "motion_manager", 4096, NULL, 6, &s_task,
+            tskNO_AFFINITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         s_running = false;
         s_available = false;
         actuator_control_stop_all(true);
@@ -715,7 +725,7 @@ void motion_manager_stop(void)
     }
     actuator_control_stop_all(false);
     if (task != NULL && task != xTaskGetCurrentTaskHandle()) {
-        vTaskDelete(task);
+        vTaskDeleteWithCaps(task);
         s_task = NULL;
     }
 }

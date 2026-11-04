@@ -1,7 +1,4 @@
 CONFIG_IDF_TARGET="esp32s31"
-# ESP-IDF 6.1 promotes default warnings (including LVGL deprecations) to
-# errors; keep the existing LVGL compatibility calls buildable during migration.
-CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS=y
 CONFIG_COMPILER_CXX_EXCEPTIONS=y
 CONFIG_COMPILER_CXX_EXCEPTIONS_EMG_POOL_SIZE=1024
 
@@ -16,8 +13,6 @@ CONFIG_HTTPD_MAX_URI_LEN=2048
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_OFFSET=0x8000
-# The partition table and bundled assets occupy the full 16 MB flash.
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 # PSRAM (external SPI RAM, required by RGB LCD frame buffer)
 CONFIG_SPIRAM=y
@@ -37,6 +32,13 @@ CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
 # Wi-Fi and lwIP buffers prefer PSRAM first; the internal DRAM stays available
 # for WakeNet, DMA descriptors and the WebSocket/TLS task stacks.
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+# Put the .bss of lwip / net80211 / pp / bt and any variable marked
+# EXT_RAM_BSS_ATTR into PSRAM. This is static data that merely sits in internal
+# SRAM for the whole uptime; moving it directly raises the internal heap (the
+# linker reuses the freed DIRAM for the heap). The big app-owned arrays
+# (video/music scan results, the timer duration label buffer, the music URL) are
+# marked EXT_RAM_BSS_ATTR for the same reason.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 # WebSocket transport task stack can live in PSRAM; the task control block
 # remains allocated from internal SRAM by FreeRTOS.
 CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y
@@ -90,11 +92,28 @@ CONFIG_ESP_WIFI_IRAM_OPT=n
 CONFIG_ESP_WIFI_RX_IRAM_OPT=n
 CONFIG_ESP_WIFI_DYNAMIC_RX_MGMT_BUFFER=y
 
+# PHY PLL tracking allocates an esp_timer with ESP_ERROR_CHECK on EVERY
+# esp_phy_enable(), and the Wi-Fi "dream" power-save path enables/disables the
+# PHY continuously. When internal SRAM is fragmented (normal on this board once
+# XiaoZhi's AFE/WebSocket are up), that ~100-byte allocation fails and IDF
+# aborts the whole device (phy_track_pll_init, ESP_ERR_NO_MEM) even though the
+# failure is unrelated to the user's action. Disabling the periodic tracking
+# removes the only heap allocation in that path; the PHY keeps its boot-time
+# calibration. This trades a small temperature-drift margin for a device that
+# cannot be taken down by transient heap fragmentation.
+CONFIG_ESP_PHY_DEBUG=y
+CONFIG_ESP_PHY_DISABLE_PLL_TRACK=y
+
 # These entries are copied from ESP-HI (ESP32C3) to reduce memory usage
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
-# Keep the AMPDU receive window within both dynamic and static RX limits.
-CONFIG_ESP_WIFI_RX_BA_WIN=2
+# Each static TX buffer costs ~1.6 KiB of internal SRAM and is allocated for the
+# whole lifetime of the Wi-Fi driver. The default of 16 buffers reserves ~25 KiB
+# of the small internal heap even while idle. Data frames are also carried by
+# the 32 PSRAM-backed CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM buffers, so 8 static
+# buffers are enough for audio/WebSocket traffic and MJPEG bursts while freeing
+# ~13 KiB for LVGL/WakeNet/timers on this memory-constrained board.
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=8
 CONFIG_NEWLIB_NANO_FORMAT=y
 CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=n
 

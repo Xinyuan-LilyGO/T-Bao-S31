@@ -300,8 +300,10 @@ void gfx_render_dirty_areas(gfx_disp_t *disp)
         gfx_area_t *area = &disp->dirty.areas[i];
         bool is_last_area = (i == last_area_idx);
         gfx_render_part_area(disp, area, i, is_last_area);
-        sync_points++;
-        gfx_area_copy(&disp->sync_pending.areas[sync_points], area);
+        if (sync_points < GFX_DISP_INV_BUF_SIZE) {
+            gfx_area_copy(&disp->sync_pending.areas[sync_points], area);
+            sync_points++;
+        }
     }
     gfx_sw_blend_perf_unbind();
     disp->sync_pending.count = sync_points;
@@ -357,13 +359,28 @@ bool gfx_render_handler(gfx_core_context_t *ctx)
         int64_t frame_start_us = esp_timer_get_time();
         gfx_refr_update_layout_dirty(disp);
 
-        if (disp->dirty.count > 1) {
-            gfx_refr_merge_areas(disp);
-        } else if (disp->dirty.count == 0) {
+        if (disp->dirty.count == 0) {
             continue;
         }
 
         gfx_render_update_child_objects(disp);
+
+        /* A packed, screen-sized buffer can compose the whole scene in one
+         * transfer. Apply this after ALL widget updates, not just animation
+         * ticks: notices, scrolling labels and icons can invalidate on their
+         * own. Keep full_frame (absolute framebuffer addressing) unchanged. */
+        const size_t screen_pixels = (size_t)disp->res.h_res * disp->res.v_res;
+        if (!disp->flags.full_frame && disp->buf.buf_pixels >= screen_pixels) {
+            disp->dirty.count = 1;
+            disp->dirty.areas[0] = (gfx_area_t) {
+                .x1 = 0, .y1 = 0,
+                .x2 = (gfx_coord_t)disp->res.h_res - 1,
+                .y2 = (gfx_coord_t)disp->res.v_res - 1,
+            };
+            memset(disp->dirty.merged, 0, sizeof(disp->dirty.merged));
+        } else if (disp->dirty.count > 1) {
+            gfx_refr_merge_areas(disp);
+        }
 
         uint32_t dirty_px = gfx_render_area_summary(disp);
         gfx_render_dirty_areas(disp);

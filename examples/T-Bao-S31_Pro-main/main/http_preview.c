@@ -17,6 +17,7 @@
 
 #include "app_camera.h"
 #include "app_activity.h"
+#include "app_language.h"
 #include "app_recorder.h"
 #include "app_sdcard.h"
 #include "app_music_player.h"
@@ -128,7 +129,7 @@ static esp_err_t root_handler(httpd_req_t *req)
     /* static: the page is large (UTF-8 + CSS/JS) and must NOT live on the httpd
      * task's stack — a stack array overflows the ~4 KB httpd task stack and the
      * handler dies silently (blank page) while /snapshot and /stream keep working. */
-    static const char html[] =
+    static const char html_zh[] =
         "<!DOCTYPE html><html lang=\"zh\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,user-scalable=no\">"
         "<title>T-Bao-S31 · 摄像头</title>"
@@ -159,8 +160,41 @@ static esp_err_t root_handler(httpd_req_t *req)
         "pre.onerror=function(){inflight=false;setTimeout(loop,200)};"
         "pre.src='/snapshot?v='+new Date().getTime();}setTimeout(loop,100);"
         "</script></body></html>";
-    httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+    static const char html_en[] =
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,user-scalable=no\">"
+        "<title>T-Bao-S31 · Camera</title>"
+        "<style>"
+        "*{box-sizing:border-box;margin:0;padding:0}"
+        "body{background:radial-gradient(circle at 50% 0%,#1c2340,#0b0e1a 70%);"
+        "min-height:100vh;display:flex;flex-direction:column;align-items:center;"
+        "color:#fff;font-family:'Segoe UI',system-ui,sans-serif;padding:16px}"
+        ".app{width:100%;max-width:560px;display:flex;flex-direction:column;gap:14px;align-items:center}"
+        ".title{font-size:20px;font-weight:600;letter-spacing:1px;margin-top:4px}"
+        ".title .dot{color:#2ecc71}"
+        ".stage{position:relative;width:100%;aspect-ratio:1;max-width:420px;"
+        "border-radius:24px;overflow:hidden;background:#000;"
+        "box-shadow:0 12px 40px rgba(0,0,0,.5);border:1px solid #2a3355}"
+        "#stream{width:100%;height:100%;object-fit:cover;display:block}"
+        ".badge{position:absolute;top:12px;left:12px;background:rgba(46,204,113,.92);"
+        "color:#04120a;font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px}"
+        "</style></head><body><div class=\"app\">"
+        "<div class=\"title\">T-Bao-S31 <span class=\"dot\">●</span> Camera</div>"
+        "<div class=\"stage\">"
+        "<img id=\"stream\" alt=\"Live camera view\">"
+        "<span class=\"badge\">● LIVE</span>"
+        "</div>"
+        "<script>"
+        "const img=document.getElementById('stream');let inflight=false,pre=null;"
+        "function loop(){if(inflight)return;inflight=true;"
+        "pre=new Image();pre.onload=function(){img.src=pre.src;inflight=false;setTimeout(loop,40)};"
+        "pre.onerror=function(){inflight=false;setTimeout(loop,200)};"
+        "pre.src='/snapshot?v='+new Date().getTime();}setTimeout(loop,100);"
+        "</script></body></html>";
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    return httpd_resp_send(req,
+                           app_language_is_english() ? html_en : html_zh,
+                           HTTPD_RESP_USE_STRLEN);
 }
 
 /* ----- SD recording control + playback ----- */
@@ -519,7 +553,7 @@ static esp_err_t settings_handler(httpd_req_t *req)
     char key[160] = {0}, api[300] = {0};
     app_music_settings_get(key, sizeof(key), api, sizeof(api));
 
-    static const char html[] =
+    static const char html_zh[] =
         "<!DOCTYPE html><html lang=\"zh\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,user-scalable=no\">"
         "<title>喵伴 · 音乐设置</title>"
@@ -564,6 +598,52 @@ static esp_err_t settings_handler(httpd_req_t *req)
         "document.getElementById('msg').textContent=j.ok?'✅ 已保存，播放音乐即可生效':'❌ 保存失败';}"
         "catch(e){document.getElementById('msg').textContent='❌ 网络错误'}}"
         "</script></body></html>";
+    static const char html_en[] =
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,user-scalable=no\">"
+        "<title>Miaoban · Music Settings</title>"
+        "<style>"
+        "*{box-sizing:border-box;margin:0;padding:0}"
+        "body{background:radial-gradient(circle at 50%% 0%%,#1c2340,#0b0e1a 70%%);"
+        "min-height:100vh;display:flex;flex-direction:column;align-items:center;"
+        "color:#fff;font-family:'Segoe UI',system-ui,sans-serif;padding:18px}"
+        ".app{width:100%%;max-width:520px;display:flex;flex-direction:column;gap:14px}"
+        ".title{font-size:20px;font-weight:600;letter-spacing:1px;margin-top:4px}"
+        ".title .dot{color:#2ecc71}"
+        ".card{background:#141a30;border:1px solid #2a3355;border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:10px}"
+        "label{font-size:13px;color:#9fb0e0}"
+        "input{background:#0d1226;color:#fff;border:1px solid #2a3355;border-radius:10px;padding:11px 12px;font-size:14px;width:100%%}"
+        "input:focus{outline:none;border-color:#4c8cff}"
+        ".hint{font-size:12px;color:#6b78a0;line-height:1.5}"
+        "button{background:linear-gradient(135deg,#4c8cff,#3a6fd0);border:0;color:#fff;"
+        "font-size:15px;font-weight:600;padding:12px 20px;border-radius:14px;cursor:pointer;"
+        "box-shadow:0 6px 18px rgba(76,140,255,.35)}"
+        "button:active{transform:scale(.96)}"
+        "#msg{font-size:13px;color:#2ecc71;min-height:18px}"
+        "a.back{color:#8fa8ff;font-size:13px;text-decoration:none;margin-top:4px}"
+        "</style></head><body><div class=\"app\">"
+        "<div class=\"title\">Miaoban <span class=\"dot\">●</span> Music Settings</div>"
+        "<div class=\"card\">"
+        "<label>yaohud API key</label>"
+        "<input id=\"key\" type=\"text\" placeholder=\"Get one from api.yaohud.cn\" value=\"%s\">"
+        "<div class=\"hint\">The device first tries the keyless injahow NetEase Music URL. If that fails, it uses the yaohud proxy:<br>https://api.yaohud.cn/api/music/wyvip?key=KEY&amp;msg=SONG&amp;n=1</div>"
+        "<label>Custom API (optional)</label>"
+        "<input id=\"api\" type=\"text\" placeholder=\"URL template containing {q}\" value=\"%s\">"
+        "<div class=\"hint\">Enter a GET URL template containing <b>{q}</b>; the song name replaces {q}. Leave it blank to use yaohud. If the device cannot reach yaohud, deploy tools/music-proxy-worker.js and enter your Worker URL here.</div>"
+        "<button onclick=\"save()\">Save</button>"
+        "<div id=\"msg\"></div>"
+        "</div>"
+        "<a class=\"back\" href=\"/\">← Back to camera</a>"
+        "<script>"
+        "async function save(){const k=document.getElementById('key').value;"
+        "const a=document.getElementById('api').value;"
+        "const fd=new URLSearchParams();fd.append('key',k);if(a)fd.append('api',a);"
+        "try{const r=await fetch('/api/settings',{method:'POST',body:fd});"
+        "const j=await r.json();"
+        "document.getElementById('msg').textContent=j.ok?'✅ Saved. New playback uses these settings.':'❌ Save failed';}"
+        "catch(e){document.getElementById('msg').textContent='❌ Network error'}}"
+        "</script></body></html>";
+    const char *html = app_language_is_english() ? html_en : html_zh;
     /* Inject current values into the static template (HTML-attribute safe: the
      * server-side values are alphanumeric/NVS strings, not user HTML). */
     size_t page_capacity = strlen(html) + sizeof(key) + sizeof(api) + 16;
@@ -575,7 +655,7 @@ static esp_err_t settings_handler(httpd_req_t *req)
     int n = snprintf(page, page_capacity, html,
                      key[0] ? key : "", api[0] ? api : "");
     (void)n;
-    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
     esp_err_t ret = httpd_resp_send(req, page, HTTPD_RESP_USE_STRLEN);
     heap_caps_free(page);
     return ret;
@@ -641,6 +721,9 @@ esp_err_t http_preview_start(void)
     config.server_port = 80;
     config.task_priority = 4;
     config.stack_size = 8192;
+    /* Stack stays internal: the /settings and /api handlers reach NVS/settings
+     * code, and NVS reads/writes disable the flash cache - a PSRAM stack would
+     * assert in esp_task_stack_is_sane_cache_disabled(). */
     config.max_uri_handlers = 16;
     /* Purge least-recently-used sockets so a stale/abandoned browser tab does
      * not leak a connection and clog the single httpd task (which made the
