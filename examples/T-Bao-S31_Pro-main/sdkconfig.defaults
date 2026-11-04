@@ -13,8 +13,6 @@ CONFIG_HTTPD_MAX_URI_LEN=2048
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_OFFSET=0x8000
-# The partition table and bundled assets occupy the full 16 MB flash.
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 # PSRAM (external SPI RAM, required by RGB LCD frame buffer)
 CONFIG_SPIRAM=y
@@ -95,6 +93,18 @@ CONFIG_ESP_WIFI_RX_IRAM_OPT=n
 CONFIG_ESP_WIFI_DYNAMIC_RX_MGMT_BUFFER=y
 # Keep the AMPDU receive window within both dynamic and static RX limits.
 CONFIG_ESP_WIFI_RX_BA_WIN=2
+# PHY PLL tracking allocates an esp_timer with ESP_ERROR_CHECK on EVERY
+# esp_phy_enable(), and the Wi-Fi "dream" power-save path enables/disables the
+# PHY continuously. When internal SRAM is fragmented (normal on this board once
+# XiaoZhi's AFE/WebSocket are up), that ~100-byte allocation fails and IDF
+# aborts the whole device (phy_track_pll_init, ESP_ERR_NO_MEM) even though the
+# failure is unrelated to the user's action. Disabling the periodic tracking
+# removes the only heap allocation in that path; the PHY keeps its boot-time
+# calibration. This trades a small temperature-drift margin for a device that
+# cannot be taken down by transient heap fragmentation.
+CONFIG_ESP_PHY_DEBUG=y
+CONFIG_ESP_PHY_DISABLE_PLL_TRACK=y
+
 # PHY PLL tracking allocates an esp_timer with ESP_ERROR_CHECK on EVERY
 # esp_phy_enable(), and the Wi-Fi "dream" power-save path enables/disables the
 # PHY continuously. When internal SRAM is fragmented (normal on this board once
