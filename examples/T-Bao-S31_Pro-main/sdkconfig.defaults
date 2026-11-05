@@ -222,6 +222,7 @@ CONFIG_XIAOZHI_CHAT_APP_TRANSPORT_WEBSOCKET=y
 # Keep the long-lived audio input task stack out of scarce internal SRAM.
 # The dynamic path is required for PSRAM-backed task stacks.
 # CONFIG_XIAOZHI_AUDIO_TASK_ALLOC_STATIC is not set
+CONFIG_ESP_H264_DECODER_IRAM=y
 CONFIG_XIAOZHI_AUDIO_TASK_ALLOC_DYNAMIC=y
 CONFIG_XIAOZHI_STACK_IN_PSRAM=y
 

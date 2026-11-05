@@ -69,9 +69,19 @@ esp_err_t esp_xiaozhi_chat_app(void);
  * @brief Request the Xiaozhi runtime to start or stop in its background worker.
  *
  * The display, page manager, WiFi and board adapter remain alive. Disabling
- * only releases the chat/MCP and audio resources owned by the Xiaozhi runtime.
+ * releases chat/MCP and AI audio resources; an active music page keeps the
+ * shared speaker output until that page exits.
  */
 esp_err_t esp_xiaozhi_chat_app_set_enabled(bool enabled);
+
+/** @brief Ensure the shared speaker path and music decoder are available. */
+esp_err_t esp_xiaozhi_chat_app_prepare_music(void);
+
+/** @brief Release the music decoder and idle speaker hardware when possible. */
+esp_err_t esp_xiaozhi_chat_app_release_music(void);
+
+/** @brief Queue music/audio release without blocking the UI task. */
+esp_err_t esp_xiaozhi_chat_app_release_music_async(void);
 
 /** @brief Return the current runtime lifecycle state. */
 esp_xiaozhi_chat_app_state_t esp_xiaozhi_chat_app_get_state(void);

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "app_sfx.h"
+#include "app_music_player.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -100,6 +101,14 @@ static void play_tone(float freq, int ms, float vol)
 void app_sfx_play(app_sfx_t sfx)
 {
     if (!s_enabled && (sfx == APP_SFX_TAP || sfx == APP_SFX_PAGE)) {
+        return;
+    }
+    /* SFX writes directly to the same codec as the MP3 pipeline. Do not issue
+     * a second synchronous codec write while music owns that output path. */
+    app_music_state_t music_state = app_music_player_get_state();
+    if ((sfx == APP_SFX_TAP || sfx == APP_SFX_PAGE) &&
+        (music_state == APP_MUSIC_PLAYING ||
+         music_state == APP_MUSIC_PAUSED)) {
         return;
     }
 

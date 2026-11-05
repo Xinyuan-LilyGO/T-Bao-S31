@@ -21,6 +21,7 @@
 #include "app_recorder.h"
 #include "app_sdcard.h"
 #include "app_music_player.h"
+#include "esp_xiaozhi_chat_app.h"
 #include "page_music.h"
 #include <dirent.h>
 
@@ -462,7 +463,10 @@ static esp_err_t play_url_handler(httpd_req_t *req)
     char *q = strchr(req->uri, '?');
     bool ok = false;
     if (q && httpd_query_key_value(q + 1, "url", url, sizeof(url)) == ESP_OK && url[0]) {
-        esp_err_t r = app_music_player_play(url);
+        esp_err_t r = esp_xiaozhi_chat_app_prepare_music();
+        if (r == ESP_OK) {
+            r = app_music_player_play(url);
+        }
         ok = (r == ESP_OK);
     }
     char resp[64];

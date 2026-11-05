@@ -7,6 +7,7 @@
 #include "esp_check.h"
 #include "esp_io_expander.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "esp_sleep.h"
 #include "esp_xiaozhi_chat_display.h"
 #include "freertos/FreeRTOS.h"
@@ -1011,8 +1012,21 @@ esp_err_t battery_monitor_start(battery_monitor_callback_t callback,
         goto start_failed;
     }
     publish_state(&s_state);
-    if (xTaskCreate(battery_display_task, "battery_ui", 4096, NULL, 4,
-                    &s_display_task) != pdPASS) {
+    /* This worker only updates LVGL/emote state and timers. It never performs
+     * I2C, NVS, or flash operations, so its stack can live in PSRAM. Keep an
+     * internal fallback so a PSRAM allocation failure cannot disable battery
+     * sampling and low-voltage protection. */
+    BaseType_t display_task_ret = xTaskCreatePinnedToCoreWithCaps(
+        battery_display_task, "battery_ui", 4096, NULL, 4, &s_display_task,
+        tskNO_AFFINITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (display_task_ret != pdPASS) {
+        ESP_LOGW(TAG, "battery UI PSRAM stack unavailable; retrying internal");
+        display_task_ret = xTaskCreatePinnedToCoreWithCaps(
+            battery_display_task, "battery_ui", 4096, NULL, 4,
+            &s_display_task, tskNO_AFFINITY,
+            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (display_task_ret != pdPASS) {
         goto start_failed;
     }
     if (xTaskCreate(battery_protection_task, "battery_protect", 4096, NULL, 6,
@@ -1054,7 +1068,7 @@ start_failed:
         s_protection_task = NULL;
     }
     if (s_display_task != NULL) {
-        vTaskDelete(s_display_task);
+        vTaskDeleteWithCaps(s_display_task);
         s_display_task = NULL;
     }
     if (s_sample_queue != NULL) {
