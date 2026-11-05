@@ -1,14 +1,14 @@
-# T-Bao S31 VoCat
+# T-Bao S31
 
 AI pet firmware for the **T-Bao S31 / ESP32-S31**. It combines Xiaozhi voice chat, a round touch UI, camera vision, media playback, and motor control in one ESP-IDF application.
 
-> Status: the T-Bao S31 board definition, camera/audio/display drivers, and application features are integrated and the firmware can be built.
+> Current status: the T-Bao S31 board definition, camera/audio/display drivers, and application features are integrated. The code can be used to build the firmware.
 
 [中文说明](README_cn.md)
 
 ## Features
 
-- **Xiaozhi voice chat**: offline wake words ("你好喵伴" and "你好小智") with WebSocket cloud ASR, LLM, and TTS, plus emote states and live captions.
+- **Xiaozhi voice chat**: the offline wake word "你好小智" with WebSocket cloud ASR, LLM, and TTS, plus emote states and live captions.
 - **Touch UI**: LVGL 9 and `esp_emote_expression` with launcher, dialogue, camera, music, video, game, timer, motion, settings, and about pages.
 - **Camera and vision**: OV2640/OV3660-compatible PARLIO JPEG camera with on-screen preview, HTTP MJPEG `/stream`, JPEG `/snapshot`, recording, lightweight face detection/face following, and guard mode.
 - **Media playback**: local audio/video from microSD; online music search resolves a playable URL from multiple public APIs.
@@ -64,6 +64,10 @@ idf.py flash
 ### First-time provisioning and model setup
 
 After flashing, follow the on-screen instructions to provision Wi-Fi. Then open [xiaozhi.me](https://xiaozhi.me/), go to the console, choose "Add device" in the upper-right corner, and enter the six-digit code shown on the display or in the serial log to configure the cloud model.
+
+### Voice control behavior
+
+After boot, call "你好小智" once. The device responds, but this first response only enters the wake state and does not start a conversation. Call "你好小智" a second time; the device may not respond again, but you can then say something such as "Tell me a joke" to start the conversation. If the device later stops responding, call "你好小智" again to wake it.
 
 ### Face-follow tuning
 

@@ -187,7 +187,6 @@ typedef struct {
     bool feeder_running;
     audio_feeder_config_t feeder_config;
     bool dsp_inited;
-    bool music_player_inited;
 } xiaozhi_audio_runtime_t;
 
 typedef struct {
@@ -206,6 +205,12 @@ typedef struct {
 static esp_xiaozhi_chat_app_t *s_xiaozhi_chat_app = NULL;
 static esp_board_manager_adapter_info_t s_bsp_info = {0};
 static xiaozhi_audio_runtime_t s_audio_runtime = {0};
+/* The speaker path is shared by Xiaozhi TTS and the music page. Keep the
+ * hardware available across an AI toggle, while allowing the music decoder
+ * task itself to be destroyed when the music page exits. */
+static bool s_music_output_ready = false;
+static bool s_audio_manager_ready = false;
+static volatile bool s_music_release_pending = false;
 /* AFE element used to gate PCM output while the server TTS is playing. The
  * AFE feed/fetch and WakeNet/VAD stay active; only the recorder feed stops. */
 static esp_gmf_element_handle_t s_afe_element = NULL;
@@ -386,7 +391,12 @@ static esp_err_t esp_xiaozhi_chat_app_init(esp_xiaozhi_chat_app_t *xiaozhi_chat_
 static esp_err_t esp_xiaozhi_chat_app_audio(esp_xiaozhi_chat_app_t *xiaozhi_chat_app,
                                             esp_board_manager_adapter_info_t bsp_info);
 static esp_err_t xiaozhi_audio_release(esp_xiaozhi_chat_app_t *xiaozhi_chat_app,
-                                       const esp_board_manager_adapter_info_t *bsp_info);
+                                       const esp_board_manager_adapter_info_t *bsp_info,
+                                       bool keep_output);
+static esp_err_t xiaozhi_music_output_prepare(
+    const esp_board_manager_adapter_info_t *bsp_info);
+static esp_err_t xiaozhi_music_output_shutdown(
+    const esp_board_manager_adapter_info_t *bsp_info);
 static esp_err_t xiaozhi_runtime_enable(void);
 static esp_err_t xiaozhi_runtime_disable(void);
 static void xiaozhi_runtime_task(void *arg);
@@ -429,7 +439,8 @@ static void battery_monitor_display_callback(
     (void)context;
     if (state != NULL) {
         (void)esp_xiaozhi_chat_display_set_battery(
-            state->battery_percent, state->charging, state->valid);
+            state->battery_percent, state->charging,
+            state->valid || state->data_stale);
     }
 }
 
@@ -1192,7 +1203,8 @@ static esp_mcp_value_t music_play_callback(const esp_mcp_property_list_t* proper
     if (url == NULL || *url == '\0') {
         return esp_mcp_value_create_bool(false);
     }
-    bool ok = (app_music_player_play(url) == ESP_OK);
+    bool ok = (esp_xiaozhi_chat_app_prepare_music() == ESP_OK &&
+               app_music_player_play(url) == ESP_OK);
     return esp_mcp_value_create_bool(ok);
 }
 
@@ -2786,12 +2798,117 @@ static void esp_xiaozhi_chat_app_audio_selftest(esp_board_manager_adapter_info_t
     ESP_LOGI(TAG, "[AUDIO_SELFTEST] done (devices closed)");
 }
 
+/* Prepare only the shared speaker path. This is deliberately independent of
+ * the Xiaozhi recorder/AFE lifecycle so music also works while AI is disabled.
+ * The codec stays open across an AI toggle, but app_music_player_deinit() can
+ * still release its decoder task when the music page is left. */
+static esp_err_t xiaozhi_music_output_prepare(
+    const esp_board_manager_adapter_info_t *bsp_info)
+{
+    if (bsp_info == NULL || bsp_info->play_dev == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    bool opened_here = false;
+    esp_codec_dev_handle_t play_dev =
+        (esp_codec_dev_handle_t)bsp_info->play_dev;
+
+    if (!s_music_output_ready) {
+        esp_err_t ret = tbao_s31_board_set_5v_power(true);
+        if (ret != ESP_OK) {
+            return ret;
+        }
+
+        esp_codec_dev_sample_info_t fs = {
+            .sample_rate = bsp_info->sample_rate,
+            .channel = bsp_info->channels,
+            .bits_per_sample = bsp_info->sample_bits,
+        };
+        if (esp_codec_dev_open(play_dev, &fs) != ESP_CODEC_DEV_OK) {
+            (void)tbao_s31_board_set_5v_power(false);
+            return ESP_FAIL;
+        }
+        opened_here = true;
+        s_play_dev = play_dev;
+
+        ret = tbao_s31_board_set_speaker(true);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Speaker enable failed: %s", esp_err_to_name(ret));
+        }
+        if (current_volume == 0) {
+            esp_codec_dev_set_out_mute(play_dev, true);
+        } else {
+            esp_codec_dev_set_out_mute(play_dev, false);
+            if (esp_codec_dev_set_out_vol(play_dev, current_volume) !=
+                    ESP_CODEC_DEV_OK) {
+                ESP_LOGW(TAG, "Failed to apply output volume to music path");
+            }
+        }
+        app_sfx_set_play_dev(play_dev, bsp_info->sample_rate);
+    } else {
+        /* The page may have released only the decoder task. Rebind the shared
+         * handle before recreating it. */
+        s_play_dev = play_dev;
+    }
+
+    if (app_music_player_init(play_dev, bsp_info->sample_rate) != ESP_OK) {
+        if (opened_here) {
+            app_sfx_set_play_dev(NULL, 0);
+            (void)tbao_s31_board_set_speaker(false);
+            (void)esp_codec_dev_close(play_dev);
+            (void)tbao_s31_board_set_5v_power(false);
+            s_play_dev = NULL;
+        }
+        return ESP_FAIL;
+    }
+
+    s_music_output_ready = true;
+    return ESP_OK;
+}
+
+/* Caller serializes this with s_audio_ctrl_mutex and ensures no AI playback
+ * task is still using the codec. */
+static esp_err_t xiaozhi_music_output_shutdown(
+    const esp_board_manager_adapter_info_t *bsp_info)
+{
+    esp_err_t first_error = ESP_OK;
+    app_sfx_set_play_dev(NULL, 0);
+
+    esp_err_t ret = tbao_s31_board_set_speaker(false);
+    if (ret != ESP_OK) {
+        first_error = ret;
+    }
+    if (bsp_info != NULL && bsp_info->play_dev != NULL &&
+            s_music_output_ready) {
+        if (esp_codec_dev_close((esp_codec_dev_handle_t)bsp_info->play_dev) !=
+                ESP_CODEC_DEV_OK && first_error == ESP_OK) {
+            first_error = ESP_FAIL;
+        }
+    }
+    s_play_dev = NULL;
+
+    if (s_audio_manager_ready) {
+        ret = audio_manager_deinit();
+        if (ret != ESP_OK && first_error == ESP_OK) {
+            first_error = ret;
+        }
+        s_audio_manager_ready = false;
+    }
+    ret = tbao_s31_board_set_5v_power(false);
+    if (ret != ESP_OK && first_error == ESP_OK) {
+        first_error = ret;
+    }
+    s_music_output_ready = false;
+    return first_error;
+}
+
 static esp_err_t esp_xiaozhi_chat_app_audio(esp_xiaozhi_chat_app_t *xiaozhi_chat_app, esp_board_manager_adapter_info_t bsp_info)
 {
     ESP_RETURN_ON_FALSE(xiaozhi_chat_app != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid app");
     ESP_RETURN_ON_FALSE(bsp_info.play_dev != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid playback device");
     ESP_RETURN_ON_FALSE(bsp_info.rec_dev != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid record device");
 
+    const bool output_was_ready = s_music_output_ready;
     memset(&s_audio_runtime, 0, sizeof(s_audio_runtime));
     xiaozhi_chat_app->read_thread = NULL;
     xiaozhi_chat_app->audio_channel = NULL;
@@ -2835,10 +2952,13 @@ static esp_err_t esp_xiaozhi_chat_app_audio(esp_xiaozhi_chat_app_t *xiaozhi_chat
     audio_feeder_config_t feeder_config = DEFAULT_AUDIO_FEEDER_CONFIG();
 
     do {
-        ret = audio_manager_init(&config);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to init audio manager: %s", esp_err_to_name(ret));
-            break;
+        if (!s_audio_manager_ready) {
+            ret = audio_manager_init(&config);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to init audio manager: %s", esp_err_to_name(ret));
+                break;
+            }
+            s_audio_manager_ready = true;
         }
         s_audio_runtime.audio_manager_inited = true;
 
@@ -2848,6 +2968,7 @@ static esp_err_t esp_xiaozhi_chat_app_audio(esp_xiaozhi_chat_app_t *xiaozhi_chat
             break;
         }
         s_audio_runtime.play_dev_opened = true;
+        s_music_output_ready = true;
 
         esp_err_t speaker_ret = tbao_s31_board_set_speaker(true);
         ESP_LOGI(TAG, "[AUDIO] XL9555_P07 amplifier enable ret=%s",
@@ -2906,13 +3027,8 @@ static esp_err_t esp_xiaozhi_chat_app_audio(esp_xiaozhi_chat_app_t *xiaozhi_chat
         } else {
             s_audio_runtime.dsp_inited = true;
         }
-        /* Network music player: routes decoded PCM to the same codec. */
-        if (app_music_player_init((esp_codec_dev_handle_t)config.play_dev,
-                                  config.board_sample_rate) != ESP_OK) {
-            ESP_LOGW(TAG, "Music player init failed (continuing)");
-        } else {
-            s_audio_runtime.music_player_inited = true;
-        }
+        /* The MP3 player is intentionally not created here. Music owns that
+         * decoder task and creates it on demand through prepare_music(). */
         app_audio_bargein_register_interrupt_cb(esp_xiaozhi_chat_app_bargein_interrupt);
         app_audio_bargein_reset();
 
@@ -3024,14 +3140,18 @@ static esp_err_t esp_xiaozhi_chat_app_audio(esp_xiaozhi_chat_app_t *xiaozhi_chat
     } while (0);
 
     if (ret != ESP_OK) {
-        xiaozhi_audio_release(xiaozhi_chat_app, &bsp_info);
+        /* If the shared output was already active for the music page, keep it
+         * alive even when an AI-only startup step fails. */
+        xiaozhi_audio_release(xiaozhi_chat_app, &bsp_info,
+                              output_was_ready);
     }
 
     return ret;
 }
 
 static esp_err_t xiaozhi_audio_release(esp_xiaozhi_chat_app_t *xiaozhi_chat_app,
-                                       const esp_board_manager_adapter_info_t *bsp_info)
+                                       const esp_board_manager_adapter_info_t *bsp_info,
+                                       bool keep_output)
 {
     esp_err_t first_error = ESP_OK;
 
@@ -3053,8 +3173,10 @@ static esp_err_t xiaozhi_audio_release(esp_xiaozhi_chat_app_t *xiaozhi_chat_app,
         }
     }
 
-    /* Stop new direct SFX writes before the codec handle is closed. */
-    if (s_play_dev != NULL) {
+    /* Stop new direct SFX writes only when the shared output is really being
+     * torn down. Normal Xiaozhi disable keeps the speaker path available for
+     * the music page. */
+    if (!keep_output && s_play_dev != NULL) {
         app_sfx_set_play_dev(NULL, 0);
     }
     app_audio_bargein_register_interrupt_cb(NULL);
@@ -3081,9 +3203,11 @@ static esp_err_t xiaozhi_audio_release(esp_xiaozhi_chat_app_t *xiaozhi_chat_app,
     xiaozhi_audio_send_release();
     xiaozhi_preroll_deinit();
 
-    /* The music player has its own decoder task and must go away before the
-     * shared codec device is closed. */
-    if (s_audio_runtime.music_player_inited || s_play_dev != NULL) {
+    /* The music decoder is independent of the AI recorder. Keep it alive
+     * across a Xiaozhi toggle, but destroy it when the whole output path is
+     * being released. The music page also explicitly destroys it on exit. */
+    if (!keep_output &&
+            (app_music_player_is_initialized() || s_play_dev != NULL)) {
         esp_err_t ret = app_music_player_deinit();
         if (ret != ESP_OK && first_error == ESP_OK) {
             first_error = ret;
@@ -3119,29 +3243,14 @@ static esp_err_t xiaozhi_audio_release(esp_xiaozhi_chat_app_t *xiaozhi_chat_app,
         app_audio_dsp_deinit_playback();
     }
 
-    if (s_audio_runtime.play_dev_opened) {
-        esp_err_t ret = tbao_s31_board_set_speaker(false);
-        if (ret != ESP_OK && first_error == ESP_OK) {
-            first_error = ret;
-        }
-    }
     if (bsp_info != NULL && s_audio_runtime.rec_dev_opened && bsp_info->rec_dev != NULL) {
         esp_codec_dev_close((esp_codec_dev_handle_t)bsp_info->rec_dev);
     }
-    if (bsp_info != NULL && s_audio_runtime.play_dev_opened && bsp_info->play_dev != NULL) {
-        esp_codec_dev_close((esp_codec_dev_handle_t)bsp_info->play_dev);
-    }
-    s_play_dev = NULL;
-
-    if (s_audio_runtime.audio_manager_inited) {
-        esp_err_t ret = audio_manager_deinit();
+    if (!keep_output) {
+        esp_err_t ret = xiaozhi_music_output_shutdown(bsp_info);
         if (ret != ESP_OK && first_error == ESP_OK) {
             first_error = ret;
         }
-    }
-    esp_err_t power_ret = tbao_s31_board_set_5v_power(false);
-    if (power_ret != ESP_OK && first_error == ESP_OK) {
-        first_error = power_ret;
     }
 
     memset(&s_audio_runtime, 0, sizeof(s_audio_runtime));
@@ -3192,12 +3301,26 @@ static esp_err_t xiaozhi_runtime_enable(void)
     esp_err_t ret = esp_xiaozhi_chat_app_init(s_xiaozhi_chat_app);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to enable Xiaozhi chat: %s", esp_err_to_name(ret));
-        tbao_s31_board_set_5v_power(false);
+        if (s_audio_ctrl_mutex != NULL) {
+            xSemaphoreTake(s_audio_ctrl_mutex, portMAX_DELAY);
+        }
+        if (!app_music_player_is_initialized()) {
+            (void)xiaozhi_music_output_shutdown(&s_bsp_info);
+        }
+        if (s_audio_ctrl_mutex != NULL) {
+            xSemaphoreGive(s_audio_ctrl_mutex);
+        }
         return ret;
     }
 
     if (s_bsp_info.play_dev != NULL && s_bsp_info.rec_dev != NULL) {
+        if (s_audio_ctrl_mutex != NULL) {
+            xSemaphoreTake(s_audio_ctrl_mutex, portMAX_DELAY);
+        }
         ret = esp_xiaozhi_chat_app_audio(s_xiaozhi_chat_app, s_bsp_info);
+        if (s_audio_ctrl_mutex != NULL) {
+            xSemaphoreGive(s_audio_ctrl_mutex);
+        }
         if (ret != ESP_OK) {
             /* Network chat can remain active without local audio hardware. */
             ESP_LOGW(TAG, "Xiaozhi audio init failed; chat remains enabled: %s",
@@ -3229,7 +3352,17 @@ static esp_err_t xiaozhi_runtime_disable(void)
         }
     }
 
-    esp_err_t audio_ret = xiaozhi_audio_release(s_xiaozhi_chat_app, &s_bsp_info);
+    /* Keep the shared output only while the music page owns a live decoder.
+     * Otherwise this is the last audio user and the codec/I2S/PA can sleep. */
+    if (s_audio_ctrl_mutex != NULL) {
+        xSemaphoreTake(s_audio_ctrl_mutex, portMAX_DELAY);
+    }
+    const bool music_active = app_music_player_is_initialized();
+    esp_err_t audio_ret = xiaozhi_audio_release(s_xiaozhi_chat_app, &s_bsp_info,
+                                                music_active);
+    if (s_audio_ctrl_mutex != NULL) {
+        xSemaphoreGive(s_audio_ctrl_mutex);
+    }
     if (audio_ret != ESP_OK && first_error == ESP_OK) {
         first_error = audio_ret;
     }
@@ -3318,6 +3451,86 @@ esp_err_t esp_xiaozhi_chat_app_set_enabled(bool enabled)
             : ESP_XIAOZHI_CHAT_APP_STATE_STOPPING;
     }
     xTaskNotifyGive(s_runtime_task);
+    return ESP_OK;
+}
+
+esp_err_t esp_xiaozhi_chat_app_prepare_music(void)
+{
+    if (s_xiaozhi_chat_app == NULL || s_bsp_info.play_dev == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_audio_ctrl_mutex != NULL &&
+            xSemaphoreTake(s_audio_ctrl_mutex, 0) != pdTRUE) {
+        /* Music teardown may be waiting for a network decoder to stop. UI and
+         * MCP callers must retry instead of waiting behind that operation. */
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t ret = xiaozhi_music_output_prepare(&s_bsp_info);
+    if (s_audio_ctrl_mutex != NULL) {
+        xSemaphoreGive(s_audio_ctrl_mutex);
+    }
+    return ret;
+}
+
+esp_err_t esp_xiaozhi_chat_app_release_music(void)
+{
+    if (s_xiaozhi_chat_app == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_audio_ctrl_mutex != NULL &&
+            xSemaphoreTake(s_audio_ctrl_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_FAIL;
+    }
+
+    esp_err_t first_error = app_music_player_deinit();
+    /* During STOPPING the worker either still owns live AI audio (and will see
+     * this decoder disappear), or it has already released AI audio and this
+     * page can finish the shared output teardown itself. */
+    const esp_xiaozhi_chat_app_state_t state = s_runtime_state;
+    const bool ai_audio_released = !s_audio_runtime.play_dev_opened &&
+        !s_audio_runtime.rec_dev_opened && !s_audio_runtime.playback_opened &&
+        !s_audio_runtime.recorder_opened && !s_audio_runtime.feeder_opened;
+    if ((state == ESP_XIAOZHI_CHAT_APP_STATE_DISABLED ||
+         state == ESP_XIAOZHI_CHAT_APP_STATE_ERROR ||
+         (state == ESP_XIAOZHI_CHAT_APP_STATE_STOPPING && ai_audio_released)) &&
+            s_music_output_ready && s_bsp_info.play_dev != NULL) {
+        esp_err_t ret = xiaozhi_music_output_shutdown(&s_bsp_info);
+        if (ret != ESP_OK && first_error == ESP_OK) {
+            first_error = ret;
+        }
+    }
+
+    if (s_audio_ctrl_mutex != NULL) {
+        xSemaphoreGive(s_audio_ctrl_mutex);
+    }
+    return first_error;
+}
+
+static void xiaozhi_music_release_task(void *arg)
+{
+    (void)arg;
+    esp_err_t ret = esp_xiaozhi_chat_app_release_music();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Background music release failed: %s",
+                 esp_err_to_name(ret));
+    }
+    s_music_release_pending = false;
+    vTaskDelete(NULL);
+}
+
+esp_err_t esp_xiaozhi_chat_app_release_music_async(void)
+{
+    if (s_music_release_pending) {
+        return ESP_OK;
+    }
+    s_music_release_pending = true;
+    BaseType_t task_ret = xTaskCreatePinnedToCoreWithCaps(
+        xiaozhi_music_release_task, "music_release", 4 * 1024, NULL, 4, NULL,
+        0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (task_ret != pdPASS) {
+        s_music_release_pending = false;
+        return ESP_ERR_NO_MEM;
+    }
     return ESP_OK;
 }
 
@@ -3592,6 +3805,10 @@ esp_err_t esp_xiaozhi_chat_app(void)
             s_runtime_last_error = ESP_ERR_NO_MEM;
             ESP_LOGE(TAG, "Failed to create Xiaozhi runtime control task");
         }
+        /* Touch polling starts earlier so coordinates can be diagnosed during
+         * boot, but user input is enabled only after the splash/emote/page
+         * renderer handoff and runtime task setup are complete. */
+        ui_touch_set_enabled(true);
         return ESP_OK;
     } while (0);
 

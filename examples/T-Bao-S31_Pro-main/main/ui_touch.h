@@ -47,6 +47,15 @@ esp_err_t ui_touch_init(void);
 void ui_touch_set_callback(ui_touch_cb_t cb);
 
 /**
+ * @brief Enable user input after the display/page startup handoff is complete.
+ *
+ * Touch sampling and coordinate logging continue while input is disabled, but
+ * LVGL sees the pointer as released and no gestures are dispatched. Enabling
+ * also discards any contact that started during boot.
+ */
+void ui_touch_set_enabled(bool enabled);
+
+/**
  * @brief  Read the current LVGL input-space touch state (last polled). Used by the LVGL
  *         pointer input device so LVGL widgets (buttons / sliders) respond to
  *         taps without a second driver reading the touch controller.

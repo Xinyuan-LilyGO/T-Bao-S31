@@ -19,10 +19,13 @@
 
 #include <string.h>
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "app_sfx.h"
 #include "app_music_player.h"
 #include "app_language.h"
 #include "app_sdcard.h"
+#include "esp_xiaozhi_chat_app.h"
+#include "esp_attr.h"
 #include "esp_xiaozhi_chat_display.h"
 #include "lvgl.h"
 #include "font_awesome_symbols.h"
@@ -82,7 +85,9 @@ static void library_hide(void);
 
 /* SD card music list (only source of tracks — network demo tracks removed). */
 #define SD_MAX_ITEMS 8
-static app_sdcard_music_item_t s_sd_items[SD_MAX_ITEMS];
+/* Scan results (8 x 428 bytes) are plain UI data; keep them out of internal
+ * .bss so the DIRAM stays available for the heap. */
+static EXT_RAM_BSS_ATTR app_sdcard_music_item_t s_sd_items[SD_MAX_ITEMS];
 static int s_sd_count = 0;
 
 /* Simulated progress */
@@ -215,15 +220,19 @@ static void next_cb(lv_event_t *e)
 static void play_cb(lv_event_t *e)
 {
     (void)e;
-    app_sfx_play(APP_SFX_TAP);
     if (s_cur_track < 0) {
+        app_sfx_play(APP_SFX_TAP);
         set_track(0);
         return;
     }
-    if (app_music_player_get_state() == APP_MUSIC_PAUSED) {
-        app_music_player_resume();
+    app_music_state_t state = app_music_player_get_state();
+    if (state == APP_MUSIC_PLAYING) {
+        (void)app_music_player_pause();
+    } else if (state == APP_MUSIC_PAUSED) {
+        (void)app_music_player_resume();
         s_play_epoch_ms = esp_timer_get_time() / 1000;
-    } else if (app_music_player_get_state() == APP_MUSIC_STOPPED) {
+    } else if (state == APP_MUSIC_STOPPED) {
+        app_sfx_play(APP_SFX_TAP);
         const char *url = cur_track_url(s_cur_track);
         if (url) {
             s_pos_ms = 0;
@@ -691,7 +700,7 @@ static void music_search_task(void *arg)
         }
     }
     s_search_task = NULL;
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);
 }
 
 static void start_online_search(const char *name)
@@ -705,8 +714,16 @@ static void start_online_search(const char *name)
         if (s_lyric) lv_label_set_text(s_lyric, app_language_text("正在搜索在线歌曲…", "Searching online…"));
         lvgl_port_unlock();
     }
-    if (xTaskCreatePinnedToCore(music_search_task, "music_srch", MUSIC_SEARCH_STACK,
-                                NULL, 4, &s_search_task, 1) != pdPASS) {
+    BaseType_t task_ret = xTaskCreatePinnedToCoreWithCaps(
+        music_search_task, "music_srch", MUSIC_SEARCH_STACK, NULL, 4,
+        &s_search_task, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (task_ret != pdPASS) {
+        ESP_LOGW("MUSIC", "search PSRAM stack unavailable; retrying internal");
+        task_ret = xTaskCreatePinnedToCoreWithCaps(
+            music_search_task, "music_srch", MUSIC_SEARCH_STACK, NULL, 4,
+            &s_search_task, 1, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (task_ret != pdPASS) {
         s_search_task = NULL;
         if (lvgl_port_lock(1000)) {
             if (s_lyric) lv_label_set_text(s_lyric, app_language_text("搜索任务创建失败", "Could not start search"));
@@ -920,6 +937,11 @@ esp_err_t page_music_on_enter(void)
     if (root == NULL) {
         return ESP_FAIL;
     }
+    esp_err_t audio_ret = esp_xiaozhi_chat_app_prepare_music();
+    if (audio_ret != ESP_OK) {
+        ESP_LOGW("MUSIC", "Music output prepare failed: %s",
+                 esp_err_to_name(audio_ret));
+    }
     ui_page_style_root(root);
     ui_page_make_back_button(root);
     ui_page_make_header_image(root, &launcher_icon_music, "音乐", "音乐播放器");
@@ -1119,10 +1141,15 @@ esp_err_t page_music_on_enter(void)
 
 esp_err_t page_music_on_exit(void)
 {
-    /* Leaving the music page must free the audio path / stream so the app does
-     * not keep consuming bandwidth or the speaker while inactive (bandwidth is
-     * only used while the music page is actually open). */
-    app_music_player_stop();
+    /* GMF stop/destroy waits for its decoder/network task and can take several
+     * seconds. Release it on an audio worker so page switching never holds the
+     * recursive LVGL lock while waiting. If Xiaozhi is disabled, that worker
+     * also closes I2S, codec, amplifier and 5V power. */
+    esp_err_t release_ret = esp_xiaozhi_chat_app_release_music_async();
+    if (release_ret != ESP_OK) {
+        ESP_LOGW("MUSIC", "Could not queue music release: %s",
+                 esp_err_to_name(release_ret));
+    }
     s_cover = NULL;
     s_title = NULL;
     s_lyric_prev = NULL;
@@ -1152,6 +1179,12 @@ void page_music_on_tick(uint32_t ms)
         return;
     }
     s_last_tick_ms = now;
+    /* A fast leave/re-enter can overlap the background decoder teardown. The
+     * prepare API is non-blocking, so retry here until that teardown releases
+     * the shared audio mutex. */
+    if (!app_music_player_is_initialized()) {
+        (void)esp_xiaozhi_chat_app_prepare_music();
+    }
     /* Advance the simulated progress while playing (use real elapsed time). */
     if (app_music_player_get_state() == APP_MUSIC_PLAYING) {
         s_pos_ms += delta;

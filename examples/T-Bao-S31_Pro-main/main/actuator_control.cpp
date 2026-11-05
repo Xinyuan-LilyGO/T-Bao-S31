@@ -7,10 +7,12 @@
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_io_expander.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "tbao_s31_board.h"
@@ -366,8 +368,17 @@ extern "C" esp_err_t actuator_control_init(actuator_state_callback_t callback,
     ESP_RETURN_ON_ERROR(apply_outputs_locked(s_state), kTag,
                         "initialize outputs low");
 
-    if (xTaskCreate(failsafe_task, "actuator_failsafe", 3072, nullptr, 5,
-                    nullptr) != pdPASS) {
+    /* LEDC/GPIO only; no flash/NVS on this path, so the stack can live in
+     * PSRAM and keep internal SRAM for Wi-Fi/AFE. */
+    BaseType_t task_ok = xTaskCreatePinnedToCoreWithCaps(
+        failsafe_task, "actuator_failsafe", 3072, nullptr, 5, nullptr,
+        tskNO_AFFINITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (task_ok != pdPASS) {
+        task_ok = xTaskCreatePinnedToCore(failsafe_task, "actuator_failsafe",
+                                          3072, nullptr, 5, nullptr,
+                                          tskNO_AFFINITY);
+    }
+    if (task_ok != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     s_initialized = true;

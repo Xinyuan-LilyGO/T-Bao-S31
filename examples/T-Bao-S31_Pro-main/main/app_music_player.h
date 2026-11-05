@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include "esp_err.h"
 #include "esp_codec_dev.h"
 
@@ -36,19 +37,23 @@ esp_err_t app_music_player_init(esp_codec_dev_handle_t play_dev, int sample_rate
  */
 esp_err_t app_music_player_deinit(void);
 
+/** @brief Return whether the decoder/player task is currently allocated. */
+bool app_music_player_is_initialized(void);
+
 /**
- * @brief  Start playing a stream by URL (https://...mp3 etc).
+ * @brief  Queue playback of a stream by URL (https://...mp3 etc).
+ *         The decoder operation runs outside the caller/UI task.
  */
 esp_err_t app_music_player_play(const char *url);
 
 /**
- * @brief  Pause / resume current stream.
+ * @brief  Queue pause / resume of the current stream.
  */
 esp_err_t app_music_player_pause(void);
 esp_err_t app_music_player_resume(void);
 
 /**
- * @brief  Stop and release the current stream.
+ * @brief  Queue stop of the current stream.
  */
 esp_err_t app_music_player_stop(void);
 

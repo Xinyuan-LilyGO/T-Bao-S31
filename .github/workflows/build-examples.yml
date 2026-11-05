@@ -81,4 +81,11 @@ jobs:
           fi
 
           idf.py --preview set-target "$IDF_TARGET"
+          if [[ -f partitions.csv ]]; then
+            grep -q '^CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y$' sdkconfig || {
+              echo 'CI configuration did not select 16 MB flash' >&2
+              grep -E 'CONFIG_ESPTOOLPY_FLASHSIZE(_16MB)?=' sdkconfig || true
+              exit 1
+            }
+          fi
           idf.py build

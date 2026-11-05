@@ -10,6 +10,7 @@
 #include "app_sdcard.h"
 #include "app_video_overlay.h"
 #include "app_video_player.h"
+#include "esp_attr.h"
 #include "esp_lvgl_port.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -91,7 +92,10 @@ LV_FONT_DECLARE(font_puhui_16_4);
 LV_FONT_DECLARE(font_puhui_20_4);
 LV_FONT_DECLARE(font_awesome_20_4);
 
-static app_sdcard_video_item_t s_items[VIDEO_MAX_ITEMS];
+/* 32 x (300 + 128) bytes of scan results = 13.7 KiB that used to sit in
+ * internal .bss for the whole uptime. The array is plain UI data (no DMA, no
+ * ISR), so it lives in PSRAM and the freed DIRAM goes back to the heap. */
+static EXT_RAM_BSS_ATTR app_sdcard_video_item_t s_items[VIDEO_MAX_ITEMS];
 static lv_obj_t *s_rows[VIDEO_MAX_ITEMS];
 static int s_item_count;
 static int s_current_item = -1;

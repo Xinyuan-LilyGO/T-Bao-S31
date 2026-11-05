@@ -5,6 +5,7 @@
 #include "esp_check.h"
 #include "hal/i2c_types.h"
 #include "esp_cam_sensor_io_parl.h"
+#include "esp_attr.h"
 #include "esp_err.h"
 #include "esp_log.h"
 
@@ -35,7 +36,8 @@ typedef struct {
     uint16_t address;
 } sccb_device_t;
 
-static sccb_device_t devices[SCCB_MAX_DEVICES];
+/* Plain data (no DMA/ISR); ~2 KiB kept out of internal .bss. */
+static EXT_RAM_BSS_ATTR sccb_device_t devices[SCCB_MAX_DEVICES];
 static uint8_t device_count = 0;
 static int sccb_i2c_port;
 static bool sccb_owns_i2c_port;

@@ -38,6 +38,7 @@
 #include "lvgl.h"
 #include "esp_lvgl_port.h"
 
+#include "app_language.h"
 #include "wifi_provisioning.h"
 
 static const char *TAG = "wifi_prov";
@@ -148,7 +149,7 @@ esp_err_t wifi_sta_connect_from_nvs(int timeout_ms)
 }
 
 /* ---- HTTP config page ---- */
-static const char *PAGE_HTML =
+static const char *PAGE_HTML_ZH =
     "<!DOCTYPE html><html lang=\"zh\"><head><meta charset=\"utf-8\">"
     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
         "<title>T-Bao-S31 WiFi 配网</title>"
@@ -164,10 +165,28 @@ static const char *PAGE_HTML =
     "<input name=\"password\" type=\"password\" placeholder=\"WiFi 密码\"><br>"
     "<button type=\"submit\">保存并连接</button></form></body></html>";
 
+static const char *PAGE_HTML_EN =
+    "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    "<title>T-Bao-S31 WiFi Setup</title>"
+    "<style>body{font-family:sans-serif;background:#101820;color:#fff;"
+    "text-align:center;padding:24px}"
+    "input{font-size:18px;padding:10px;width:80%;margin:8px 0;border-radius:8px}"
+    "button{font-size:18px;padding:12px 28px;border:0;border-radius:8px;"
+    "background:#4caf50;color:#fff;margin-top:12px}</style></head>"
+    "<body><h2>T-Bao-S31 WiFi Setup</h2>"
+    "<p>Enter the name and password of a 2.4 GHz WiFi network</p>"
+    "<form action=\"/connect\" method=\"post\">"
+    "<input name=\"ssid\" placeholder=\"WiFi name (SSID)\" required><br>"
+    "<input name=\"password\" type=\"password\" placeholder=\"WiFi password\"><br>"
+    "<button type=\"submit\">Save and connect</button></form></body></html>";
+
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, PAGE_HTML, HTTPD_RESP_USE_STRLEN);
+    return httpd_resp_send(req,
+                           app_language_is_english() ? PAGE_HTML_EN : PAGE_HTML_ZH,
+                           HTTPD_RESP_USE_STRLEN);
 }
 
 static int hex_val(char c)
@@ -287,8 +306,24 @@ static esp_err_t connect_post_handler(httpd_req_t *req)
         "</head><body style=\"font-family:sans-serif;background:#101820;color:#fff;"
         "text-align:center;padding:32px\"><h2>缺少 WiFi 名称</h2>"
         "<p><a href=\"/\" style=\"color:#4caf50\">返回重试</a></p></body></html>";
+    const char *page_ok_en =
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<title>Saved</title></head><body style=\"font-family:sans-serif;"
+        "background:#101820;color:#fff;text-align:center;padding:32px\">"
+        "<h2>Saved ✓</h2><p>The device will restart and connect to WiFi. "
+        "Return to your phone's WiFi list and reconnect to your normal network.</p>"
+        "</body></html>";
+    const char *page_bad_en =
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "</head><body style=\"font-family:sans-serif;background:#101820;color:#fff;"
+        "text-align:center;padding:32px\"><h2>WiFi name is required</h2>"
+        "<p><a href=\"/\" style=\"color:#4caf50\">Try again</a></p></body></html>";
+    const bool english = app_language_is_english();
+    const char *response = r == ESP_OK
+        ? (english ? page_ok_en : page_ok)
+        : (english ? page_bad_en : page_bad);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    httpd_resp_send(req, (r == ESP_OK) ? page_ok : page_bad, HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
 
     if (r == ESP_OK && s_prov_done) {
         xSemaphoreGive(s_prov_done);
@@ -399,7 +434,9 @@ static void draw_provisioning_screen(const char *ap_ssid)
     lv_obj_t *label = lv_label_create(top);
     char txt[192];
     snprintf(txt, sizeof(txt),
-             "配网模式\n\n请连接 WiFi：\n%s\n\n然后浏览器打开\n192.168.4.1",
+             app_language_is_english()
+                 ? "WiFi setup\n\nConnect to WiFi:\n%s\n\nThen open in a browser\n192.168.4.1"
+                 : "配网模式\n\n请连接 WiFi：\n%s\n\n然后浏览器打开\n192.168.4.1",
              ap_ssid);
     lv_label_set_text(label, txt);
     lv_obj_set_style_text_font(label, &font_puhui_20_4, 0);
@@ -429,7 +466,11 @@ static void draw_provisioning_done_screen(const char *ssid)
 
     lv_obj_t *label = lv_label_create(top);
     char txt[160];
-    snprintf(txt, sizeof(txt), "配网成功\n\n%s\n\n正在重启连接...", ssid);
+    snprintf(txt, sizeof(txt),
+             app_language_is_english()
+                 ? "WiFi setup complete\n\n%s\n\nRestarting to connect..."
+                 : "配网成功\n\n%s\n\n正在重启连接...",
+             ssid);
     lv_label_set_text(label, txt);
     lv_obj_set_style_text_font(label, &font_puhui_20_4, 0);
     lv_obj_set_style_text_color(label, lv_color_white(), 0);

@@ -27,6 +27,9 @@ static TaskHandle_t s_task = NULL;
 static TaskHandle_t s_disp_task = NULL;
 static QueueHandle_t s_gesture_queue = NULL;
 static bool s_running = false;
+/* The controller is sampled during boot so diagnostics remain useful, but
+ * input must stay isolated until the LVGL/emote/page ownership handoff ends. */
+static volatile bool s_input_enabled = false;
 
 /* Gestures are classified in the polling touch task but DISPATCHED in a separate
  * task. This keeps the poller free to keep feeding LVGL pointer input even while
@@ -101,6 +104,9 @@ static int64_t now_ms(void)
 
 static void emit(ui_gesture_t g, int x, int y)
 {
+    if (!s_input_enabled) {
+        return;
+    }
     if (s_gesture_queue == NULL) {
         /* Queue not ready yet (early boot) — dispatch directly as a fallback. */
         if (s_cb) {
@@ -245,6 +251,9 @@ esp_err_t ui_touch_init(void)
         return ESP_ERR_INVALID_STATE;
     }
     s_touch = h->touch_handle;
+    s_input_enabled = false;
+    s_down = false;
+    s_cur_pressed = false;
 
     if (s_gesture_queue == NULL) {
         s_gesture_queue = xQueueCreate(8, sizeof(gesture_msg_t));
@@ -275,6 +284,25 @@ void ui_touch_set_callback(ui_touch_cb_t cb)
     s_cb = cb;
 }
 
+void ui_touch_set_enabled(bool enabled)
+{
+    /* A contact held across the boot boundary must not become a tap/swipe
+     * after initialization merely because its release is observed later. */
+    if (enabled && !s_input_enabled) {
+        s_down = false;
+        s_cur_pressed = false;
+        s_down_ms = 0;
+        s_last_touch_ms = 0;
+        s_last_x = 0;
+        s_last_y = 0;
+    }
+    s_input_enabled = enabled;
+    if (!enabled) {
+        s_down = false;
+        s_cur_pressed = false;
+    }
+}
+
 void ui_touch_get_pos(int *x, int *y, bool *pressed)
 {
     if (x) {
@@ -287,12 +315,13 @@ void ui_touch_get_pos(int *x, int *y, bool *pressed)
         *y = (int)s_cur_y;
     }
     if (pressed) {
-        *pressed = s_cur_pressed;
+        *pressed = s_input_enabled && s_cur_pressed;
     }
 }
 
 esp_err_t ui_touch_deinit(void)
 {
+    s_input_enabled = false;
     if (s_task) {
         s_running = false;
         vTaskDelay(pdMS_TO_TICKS(TOUCH_POLL_MS * 2));
